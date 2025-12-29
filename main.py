@@ -3,6 +3,7 @@ import mplfinance as mpf
 import pandas as pd
 import numpy as np
 import base64
+import json
 from io import BytesIO
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -20,7 +21,6 @@ ALL_TICKERS = [t for sector in SECTORS.values() for t in sector]
 # --- 2. 核心繪圖函式 ---
 def identify_smc_features(df):
     features = {"FVG": []}
-    # 簡單 FVG 識別
     for i in range(2, len(df)):
         if df['Low'].iloc[i] > df['High'].iloc[i-2]:
             features['FVG'].append({'type': 'Bullish', 'top': df['Low'].iloc[i], 'bottom': df['High'].iloc[i-2], 'index': df.index[i-1]})
@@ -30,20 +30,18 @@ def identify_smc_features(df):
 
 def generate_chart_image(df, ticker, timeframe):
     try:
-        plot_df = df.tail(50) # 畫最後50根
+        plot_df = df.tail(50)
         if len(plot_df) < 20: return None
         
         swing_high = plot_df['High'].max()
         swing_low = plot_df['Low'].min()
         eq = (swing_high + swing_low) / 2
-        
         smc = identify_smc_features(plot_df)
         
-        # 設定外觀 (黑底)
+        # 設定外觀
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
         s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#334155', facecolor='#0f172a')
         
-        # 繪圖
         fig, axlist = mpf.plot(plot_df, type='candle', style=s, volume=False,
             title=dict(title=f"{ticker} - {timeframe}", color='white', size=10),
             figsize=(5, 3), returnfig=True)
@@ -51,7 +49,7 @@ def generate_chart_image(df, ticker, timeframe):
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # 畫 Premium/Discount 區域
+        # 畫區域
         rect_prem = patches.Rectangle((x_min, eq), x_max-x_min, swing_high-eq, linewidth=0, facecolor='#ef4444', alpha=0.1)
         ax.add_patch(rect_prem)
         rect_disc = patches.Rectangle((x_min, swing_low), x_max-x_min, eq-swing_low, linewidth=0, facecolor='#10b981', alpha=0.1)
@@ -67,26 +65,22 @@ def generate_chart_image(df, ticker, timeframe):
                 ax.add_patch(rect)
             except: pass
 
-        # 存檔
         buf = BytesIO()
-        fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=70)
+        fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=60)
         plt.close(fig)
         buf.seek(0)
         img_base64 = base64.b64encode(buf.read()).decode('utf-8')
         return f"data:image/png;base64,{img_base64}", swing_high, swing_low
-    except Exception as e:
-        print(f"Plot Error {ticker}: {e}")
+    except:
         return None
 
 # --- 3. 主程式 ---
 def main():
-    print("🚀 Starting Analysis (Force Visual Mode)...")
+    print("🚀 Starting Analysis (JSON Data Mode)...")
     
-    # 1. 下載數據
     data_daily = yf.download(ALL_TICKERS + ["SPY"], period="1y", interval="1d", group_by='ticker', progress=False)
     data_hourly = yf.download(ALL_TICKERS, period="1mo", interval="1h", group_by='ticker', progress=False)
     
-    # 處理大盤
     if isinstance(data_daily.columns, pd.MultiIndex):
         spy_close = data_daily['SPY']['Close']
     else:
@@ -96,13 +90,14 @@ def main():
     sector_html_blocks = ""
     screener_rows = ""
     passed_count = 0
+    
+    # 🌟 關鍵修改：用來儲存所有圖表數據的字典
+    APP_DATA = {}
 
-    # 2. 迴圈分析
     for sector, tickers in SECTORS.items():
         cards_in_sector = ""
         for t in tickers:
             try:
-                # 處理數據結構
                 if isinstance(data_daily.columns, pd.MultiIndex):
                     try:
                         df_d = data_daily[t].dropna()
@@ -111,7 +106,6 @@ def main():
                 else: continue
 
                 if len(df_d) < 50: continue
-                
                 curr_price = df_d['Close'].iloc[-1]
                 if isinstance(curr_price, pd.Series): curr_price = curr_price.iloc[0]
 
@@ -124,14 +118,11 @@ def main():
                 
                 stock_ret = df_d['Close'].pct_change()
                 combo = pd.DataFrame({'S': stock_ret, 'M': spy_ret}).dropna()
-                beta = 0
-                if len(combo) > 30:
-                    beta = combo['S'].rolling(252).cov(combo['M']).iloc[-1] / combo['M'].rolling(252).var().iloc[-1]
+                beta = combo['S'].rolling(252).cov(combo['M']).iloc[-1] / combo['M'].rolling(252).var().iloc[-1] if len(combo)>30 else 0
 
-                # 這裡只做標記，不影響畫圖
                 pass_filter = (curr_price > sma200 and vol > 900000000 and beta >= 1.0)
 
-                # --- ⚠️ 強制畫圖 (不管有沒有訊號) ---
+                # 強制畫圖
                 res_d = generate_chart_image(df_d, t, "Daily")
                 if not res_d: continue
                 img_d_src, tp, sl = res_d
@@ -142,53 +133,38 @@ def main():
                 # 計算訊號
                 range_len = tp - sl
                 pos_pct = (curr_price - sl) / range_len if range_len > 0 else 0.5
-                signal = "LONG" if pos_pct < 0.45 else "WAIT" # 放寬一點標準到 0.45
+                signal = "LONG" if pos_pct < 0.45 else "WAIT"
                 cls = "b-long" if signal == "LONG" else "b-wait"
 
-                # AI 分析文案
+                # 準備文案
                 deploy_html = ""
                 if signal == "LONG":
                     entry = curr_price
                     stop_loss = sl * 0.98
                     take_profit = tp
                     rr = (take_profit - entry) / (entry - stop_loss) if (entry - stop_loss) > 0 else 0
-                    
-                    deploy_html = f"""
-                    <div class='deploy-box long'>
-                        <div class='deploy-title'>✅ LONG SETUP</div>
-                        <ul class='deploy-list'>
-                            <li><b>Price:</b> ${entry:.2f} (Discount Zone)</li>
-                            <li><b>Stop Loss:</b> ${stop_loss:.2f} (SSL)</li>
-                            <li><b>Target:</b> ${take_profit:.2f} (BSL)</li>
-                            <li><b>R:R Ratio:</b> {rr:.1f}R</li>
-                        </ul>
-                    </div>
-                    """
+                    deploy_html = f"<div class='deploy-box long'><div class='deploy-title'>✅ LONG SETUP</div><ul class='deploy-list'><li><b>Entry:</b> ${entry:.2f}</li><li><b>SL:</b> ${stop_loss:.2f}</li><li><b>TP:</b> ${take_profit:.2f}</li><li><b>RR:</b> {rr:.1f}R</li></ul></div>"
                 else:
-                    eq = (tp + sl) / 2
                     target_buy = sl + (range_len * 0.4)
-                    deploy_html = f"""
-                    <div class='deploy-box wait'>
-                        <div class='deploy-title'>⏳ WAIT / WATCH</div>
-                        <ul class='deploy-list'>
-                            <li>Price is in <b>Premium</b>.</li>
-                            <li>Wait for drop below: <b>${target_buy:.2f}</b></li>
-                            <li>Equilibrium: ${eq:.2f}</li>
-                        </ul>
-                    </div>
-                    """
-                
-                # 清理字串
-                deploy_clean = deploy_html.replace('"', '&quot;').replace('\n', '')
+                    deploy_html = f"<div class='deploy-box wait'><div class='deploy-title'>⏳ WAIT</div><ul class='deploy-list'><li>Price in Premium.</li><li>Wait for drop below: <b>${target_buy:.2f}</b></li></ul></div>"
 
-                # 建立卡片
+                # 🌟 關鍵修改：將數據存入字典，而不是塞進 HTML 字串
+                APP_DATA[t] = {
+                    "signal": signal,
+                    "price": f"${curr_price:.2f}",
+                    "deploy": deploy_html,
+                    "img_d": img_d_src,
+                    "img_h": img_h_src
+                }
+
+                # 🌟 卡片現在只傳遞 't' (Ticker 名稱)
                 cards_in_sector += f"""
-                <div class="card" onclick="openModal('{t}', '{img_d_src}', '{img_h_src}', '{signal}', '{deploy_clean}')">
+                <div class="card" onclick="openModal('{t}')">
                     <div class="head">
                         <div><div class="code">{t}</div><div class="price">${curr_price:.2f}</div></div>
                         <span class="badge {cls}">{signal}</span>
                     </div>
-                    <div class="hint">Tap for Chart & Plan</div>
+                    <div class="hint">Tap for Details ↗</div>
                 </div>
                 """
                 
@@ -197,20 +173,22 @@ def main():
                     screener_rows += f"<tr><td>{t}</td><td>${curr_price:.2f}</td><td class='g'>Pass</td><td>{beta:.2f}</td><td><span class='badge {cls}'>{signal}</span></td></tr>"
 
             except Exception as e:
-                print(f"Error processing {t}: {e}")
+                print(f"Skipping {t}: {e}")
                 continue
         
         if cards_in_sector:
             sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards_in_sector}</div>"
 
-    # 生成 HTML
+    # 生成 HTML (將數據字典轉換為 JSON)
+    json_data = json.dumps(APP_DATA)
+    
     final_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>DailyDip Visual Report</title>
+    <title>DailyDip AI Report</title>
     <style>
         :root {{ --bg:#0f172a; --card:#1e293b; --text:#f8fafc; --acc:#3b82f6; --g:#10b981; --r:#ef4444; --y:#fbbf24; }}
         body {{ background:var(--bg); color:var(--text); font-family:sans-serif; margin:0; padding:10px; }}
@@ -240,8 +218,8 @@ def main():
         .deploy-title {{ font-weight:bold; margin-bottom:5px; color:white; }}
         .deploy-list {{ margin:0; padding-left:20px; color:#cbd5e1; font-size:0.9rem; }}
         .close-btn {{ width:100%; padding:12px; background:var(--acc); border:none; color:white; border-radius:6px; cursor:pointer; font-weight:bold; font-size:1rem; }}
-        .time {{ text-align:center; color:#666; font-size:0.7rem; margin-top:30px; }}
         .chart-lbl {{ color:var(--acc); font-weight:bold; display:block; margin-bottom:5px; font-size:0.9rem; }}
+        .time {{ text-align:center; color:#666; font-size:0.7rem; margin-top:30px; }}
     </style>
     </head>
     <body>
@@ -277,19 +255,30 @@ def main():
         </div>
 
         <script>
+        // 🌟 這是所有數據的核心資料庫
+        const STOCK_DATA = {json_data};
+
         function setTab(id, el) {{
             document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
             document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
             document.getElementById(id).classList.add('active');
             el.classList.add('active');
         }}
-        function openModal(t, d, h, s, html) {{
+
+        function openModal(ticker) {{
+            // 🌟 從資料庫讀取數據，而不是從 HTML 屬性
+            const data = STOCK_DATA[ticker];
+            if (!data) return;
+
             document.getElementById('modal').style.display = 'flex';
-            document.getElementById('m-ticker').innerText = t + " (" + s + ")";
-            document.getElementById('m-deploy').innerHTML = html;
+            document.getElementById('m-ticker').innerText = ticker + " (" + data.signal + ")";
+            document.getElementById('m-deploy').innerHTML = data.deploy;
             
-            document.getElementById('chart-d').innerHTML = d ? '<img src="'+d+'">' : '<div style="padding:20px;text-align:center;color:#666">No Chart Data</div>';
-            document.getElementById('chart-h').innerHTML = h ? '<img src="'+h+'">' : '<div style="padding:20px;text-align:center;color:#666">No Chart Data</div>';
+            const dImg = data.img_d ? '<img src="' + data.img_d + '">' : '<div style="padding:20px;text-align:center;color:#666">No Data</div>';
+            const hImg = data.img_h ? '<img src="' + data.img_h + '">' : '<div style="padding:20px;text-align:center;color:#666">No Data</div>';
+            
+            document.getElementById('chart-d').innerHTML = dImg;
+            document.getElementById('chart-h').innerHTML = hImg;
         }}
         </script>
     </body>
