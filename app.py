@@ -1,5 +1,5 @@
 import matplotlib
-matplotlib.use('Agg')  # 修正 1: 設定無圖形介面模式 (防止 Server 崩潰)
+matplotlib.use('Agg')  # Fix 1: No GUI mode
 
 from flask import Flask, render_template_string
 import yfinance as yf
@@ -14,22 +14,21 @@ import time
 import os
 from datetime import datetime
 
-# 修正 2: 解決 yfinance 在雲端的快取權限問題
-# 強制將快取路徑設為 /tmp (Render 唯一可寫入的臨時資料夾)
+# Fix 2: Cache location for cloud environments
 yf.set_tz_cache_location("/tmp/yf_cache")
 
 app = Flask(__name__)
 
-# --- 全域變數 ---
+# --- Global Variables ---
 cached_html = None
 last_update_time = None
-CACHE_DURATION = 3600  # 每 1 小時更新一次 (秒)
+CACHE_DURATION = 3600  # 1 hour cache
 
-# --- 核心邏輯 ---
+# --- Core Logic ---
 def generate_dashboard():
-    print("🔄 開始執行數據更新 (這需要幾分鐘)...")
+    print("🔄 Starting data update...")
     
-    # 1. 設定板塊與觀察清單
+    # 1. Sectors & Watchlist
     SECTORS = {
         "💎 Magnificent 7 & AI": ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "AMD", "AVGO"],
         "⚡ Semiconductor": ["TSM", "ASML", "AMAT", "MU", "INTC", "ARM"],
@@ -38,12 +37,12 @@ def generate_dashboard():
     }
     ALL_TICKERS = [t for sector in SECTORS.values() for t in sector]
 
-    # 2. 篩選參數
+    # 2. Filter Parameters
     FILTER_SMA_PERIOD = 200
     FILTER_MIN_MONTHLY_VOL = 900000000
     FILTER_MIN_BETA = 1.0
 
-    # SMC 識別函數
+    # SMC Identification Function
     def identify_smc_features(df):
         features = {"FVG": [], "EQH": [], "EQL": [], "DISP": []}
         df['Body'] = abs(df['Close'] - df['Open'])
@@ -56,7 +55,7 @@ def generate_dashboard():
             elif df['High'].iloc[i] < df['Low'].iloc[i-2]:
                 features['FVG'].append({'type': 'Bearish', 'top': df['Low'].iloc[i-2], 'bottom': df['High'].iloc[i], 'index': df.index[i-1]})
         
-        # 簡化版 EQH/EQL 識別
+        # Simplified EQH/EQL
         window = 5
         highs = df['High']
         lows = df['Low']
@@ -69,7 +68,7 @@ def generate_dashboard():
                      break
         return features
 
-    # 繪圖函數
+    # Chart Generation Function (Modified to include Legend)
     def generate_chart_image(df, ticker, timeframe):
         try:
             plot_df = df.tail(60)
@@ -90,7 +89,7 @@ def generate_dashboard():
             ax = axlist[0]
             x_min, x_max = ax.get_xlim()
 
-            # 背景色 (Premium / Discount)
+            # Background Color (Premium / Discount)
             rect_prem = patches.Rectangle((x_min, eq), x_max-x_min, swing_high-eq, linewidth=0, facecolor='#ef4444', alpha=0.1)
             ax.add_patch(rect_prem)
             rect_disc = patches.Rectangle((x_min, swing_low), x_max-x_min, eq-swing_low, linewidth=0, facecolor='#10b981', alpha=0.1)
@@ -105,6 +104,20 @@ def generate_dashboard():
                     ax.add_patch(rect)
                 except: pass
 
+            # --- ADDING LEGEND INSIDE THE GRAPHIC ---
+            # Create custom patches for the legend
+            legend_elements = [
+                patches.Patch(facecolor='#10b981', alpha=0.1, edgecolor='#10b981', linewidth=1, label='Discount (Buy)'),
+                patches.Patch(facecolor='#ef4444', alpha=0.1, edgecolor='#ef4444', linewidth=1, label='Premium (Sell)'),
+                patches.Patch(facecolor='#10b981', alpha=0.6, label='Bull FVG'),
+                patches.Patch(facecolor='#ef4444', alpha=0.6, label='Bear FVG')
+            ]
+            
+            # Place legend in upper left, semi-transparent
+            ax.legend(handles=legend_elements, loc='upper left', 
+                      fontsize=8, framealpha=0.2, facecolor='#1e293b', 
+                      edgecolor='none', labelcolor='#cbd5e1')
+
             buf = BytesIO()
             fig.savefig(buf, format='png', bbox_inches='tight', transparent=True)
             plt.close(fig)
@@ -114,8 +127,8 @@ def generate_dashboard():
             print(f"Chart Error {ticker}: {e}")
             return None, 0, 0
 
-    # 數據下載
-    print("   📥 下載數據中...")
+    # Data Download
+    print("   📥 Downloading data...")
     data_daily = yf.download(ALL_TICKERS + ["SPY"], period="1y", group_by='ticker', progress=False)
     data_hourly = yf.download(ALL_TICKERS, period="1mo", interval="1h", group_by='ticker', progress=False)
     spy_ret = data_daily['SPY']['Close'].pct_change()
@@ -124,7 +137,7 @@ def generate_dashboard():
     passed_count = 0
     screener_rows = ""
 
-    print("   🔍 分析中...")
+    print("   🔍 Analyzing...")
     for sector, tickers in SECTORS.items():
         cards_in_sector = ""
         for t in tickers:
@@ -135,26 +148,26 @@ def generate_dashboard():
                 
                 current_price = df_d['Close'].iloc[-1]
                 
-                # 篩選
+                # Filter Logic
                 sma200 = df_d['Close'].rolling(200).mean().iloc[-1]
                 dollar_vol = (df_d['Close'] * df_d['Volume']).rolling(21).mean().iloc[-1] * 21
                 combo = pd.DataFrame({'S': df_d['Close'].pct_change(), 'M': spy_ret}).dropna()
                 beta = combo['S'].cov(combo['M']) / combo['M'].var() if len(combo)>30 else 0
                 pass_filter = (current_price > sma200 and dollar_vol > FILTER_MIN_MONTHLY_VOL and beta >= FILTER_MIN_BETA)
 
-                # 圖表
+                # Charts
                 img_d, tp, sl = generate_chart_image(df_d, t, "Daily")
                 if not img_d: continue
                 img_h, _, _ = generate_chart_image(df_h if not df_h.empty else df_d, t, "Hourly")
                 
-                # 訊號
+                # Signals
                 s_low, s_high = sl, tp
                 range_len = s_high - s_low
                 pos_pct = (current_price - s_low) / range_len if range_len > 0 else 0.5
                 signal = "LONG" if pos_pct < 0.4 else "WAIT"
                 cls = "b-long" if signal == "LONG" else "b-wait"
                 
-                # HTML 生成
+                # HTML Generation
                 if signal == "LONG":
                     rr = (tp - current_price) / (current_price - sl*0.98) if (current_price - sl*0.98) > 0 else 0
                     ai_text = f"<b>🟢 AI Bullish:</b> Buy in Discount. Target BSL ${tp:.2f}."
@@ -177,7 +190,7 @@ def generate_dashboard():
         if cards_in_sector:
             sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards_in_sector}</div>"
 
-    # 生成完整 HTML (CSS 與 JS) - 已增強圖表說明
+    # --- HTML Template (Cleaned, no external legend) ---
     html_template = f"""
     <!DOCTYPE html>
     <html>
@@ -188,15 +201,6 @@ def generate_dashboard():
         :root {{ --bg:#0f172a; --card:#1e293b; --text:#f8fafc; --acc:#3b82f6; --g:#10b981; --r:#ef4444; --y:#fbbf24; }}
         body {{ background:var(--bg); color:var(--text); font-family:-apple-system, sans-serif; margin:0; padding:20px; }}
         
-        /* 頁面頂部 Legend */
-        .legend-box {{ background:rgba(255,255,255,0.03); border:1px solid #334155; padding:15px; border-radius:10px; margin-bottom:20px; display:flex; flex-wrap:wrap; gap:20px; justify-content:center; font-size:0.85rem; }}
-        .l-item {{ display:flex; align-items:center; gap:8px; color:#cbd5e1; }}
-        .sq {{ width:14px; height:14px; border-radius:3px; }}
-        .sq-bg-g {{ background:rgba(16,185,129,0.2); border:1px solid var(--g); }}
-        .sq-bg-r {{ background:rgba(239,68,68,0.2); border:1px solid var(--r); }}
-        .sq-solid-g {{ background:var(--g); opacity:0.7; }}
-        .sq-solid-r {{ background:var(--r); opacity:0.7; }}
-
         .tabs {{ display:flex; gap:10px; border-bottom:1px solid #334155; padding-bottom:15px; margin-bottom:20px; position:sticky; top:0; background:var(--bg); z-index:10; }}
         .tab {{ padding:10px 20px; background:#334155; border-radius:8px; cursor:pointer; color:#94a3b8; font-weight:bold; }}
         .tab.active {{ background:var(--acc); color:white; }}
@@ -224,31 +228,35 @@ def generate_dashboard():
     </style>
     </head>
     <body>
-    <div style="text-align:center; margin-bottom:10px; color:#94a3b8; font-size:0.8rem;">Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
     
-    <div class="legend-box">
-        <div class="l-item"><div class="sq sq-bg-g"></div>Discount Zone (Buy Area)</div>
-        <div class="l-item"><div class="sq sq-bg-r"></div>Premium Zone (Sell Area)</div>
-        <div class="l-item"><div class="sq sq-solid-g"></div>Bullish FVG (Support Gap)</div>
-        <div class="l-item"><div class="sq sq-solid-r"></div>Bearish FVG (Resist Gap)</div>
+    <div style="text-align:center; margin-bottom:10px; color:#94a3b8; font-size:0.8rem;">
+        Last Updated: {datetime.now().strftime('%Y-%m-%d %H:%M')}
     </div>
 
     <div class="tabs">
         <div class="tab active" onclick="setTab('overview', this)">📊 Sectors</div>
         <div class="tab" onclick="setTab('screener', this)">🔍 Screener ({passed_count})</div>
     </div>
+
     <div id="overview" class="content active">{sector_html_blocks}</div>
+    
     <div id="screener" class="content">
-        <table><thead><tr><th>Ticker</th><th>Price</th><th>Trend</th><th>Beta</th><th>Signal</th></tr></thead><tbody>{screener_rows}</tbody></table>
+        <table>
+            <thead><tr><th>Ticker</th><th>Price</th><th>Trend</th><th>Beta</th><th>Signal</th></tr></thead>
+            <tbody>{screener_rows}</tbody>
+        </table>
     </div>
+
     <div id="modal" class="modal" onclick="document.getElementById('modal').style.display='none'">
         <div class="m-content" onclick="event.stopPropagation()">
             <h2 id="m-ticker" style="margin-top:0; color:white"></h2>
             <div id="m-ai" class="ai-box"></div>
-            <img id="img-d" src=""><img id="img-h" src="">
+            <img id="img-d" src="">
+            <img id="img-h" src="">
             <button class="close-btn" onclick="document.getElementById('modal').style.display='none'">Close</button>
         </div>
     </div>
+
     <script>
     function setTab(id, el) {{
         document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
@@ -273,7 +281,7 @@ def generate_dashboard():
 def home():
     global cached_html, last_update_time
     
-    # 快取機制: 如果 HTML 是空的，或超過 1 小時沒更新，就重新生成
+    # Cache mechanism
     if cached_html is None or (time.time() - last_update_time > CACHE_DURATION):
         cached_html = generate_dashboard()
         last_update_time = time.time()
@@ -281,6 +289,5 @@ def home():
     return render_template_string(cached_html)
 
 if __name__ == '__main__':
-    # 修正 3: Render 會自動設定 PORT 環境變數，這裡讀取它
     port = int(os.environ.get('PORT', 5000))
     app.run(host='0.0.0.0', port=port)
