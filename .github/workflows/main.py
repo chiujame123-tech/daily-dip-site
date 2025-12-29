@@ -10,17 +10,17 @@ from datetime import datetime
 
 # --- 1. 設定觀察清單 ---
 SECTORS = {
-    "💎 Magnificent 7 & AI": ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "AMD", "AVGO"],
-    "⚡ Semiconductor": ["TSM", "ASML", "AMAT", "MU", "INTC", "ARM"],
-    "☁️ Software & Crypto": ["PLTR", "COIN", "MSTR", "CRM", "SNOW"],
-    "🏦 Finance & Retail": ["JPM", "V", "COST", "MCD", "NKE"],
+    "💎 Mag 7": ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META"],
+    "⚡ Semi": ["TSM", "AMD", "AVGO", "MU", "INTC", "ARM"],
+    "☁️ Software": ["PLTR", "COIN", "MSTR", "CRM", "SNOW"],
+    "🏦 Finance": ["JPM", "V", "COST", "MCD", "NKE"],
 }
 ALL_TICKERS = [t for sector in SECTORS.values() for t in sector]
 
 # --- 2. 核心繪圖函式 ---
 def identify_smc_features(df):
-    features = {"FVG": [], "DISP": []}
-    # 簡單 FVG
+    features = {"FVG": []}
+    # 簡單 FVG 識別
     for i in range(2, len(df)):
         if df['Low'].iloc[i] > df['High'].iloc[i-2]:
             features['FVG'].append({'type': 'Bullish', 'top': df['Low'].iloc[i], 'bottom': df['High'].iloc[i-2], 'index': df.index[i-1]})
@@ -30,8 +30,8 @@ def identify_smc_features(df):
 
 def generate_chart_image(df, ticker, timeframe):
     try:
-        plot_df = df.tail(60)
-        if len(plot_df) < 30: return None
+        plot_df = df.tail(50) # 畫最後50根
+        if len(plot_df) < 20: return None
         
         swing_high = plot_df['High'].max()
         swing_low = plot_df['Low'].min()
@@ -39,25 +39,26 @@ def generate_chart_image(df, ticker, timeframe):
         
         smc = identify_smc_features(plot_df)
         
+        # 設定外觀 (黑底)
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
-        s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#334155', facecolor='#1e293b')
+        s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#334155', facecolor='#0f172a')
         
-        # 縮小尺寸以優化速度
+        # 繪圖
         fig, axlist = mpf.plot(plot_df, type='candle', style=s, volume=False,
             title=dict(title=f"{ticker} - {timeframe}", color='white', size=10),
-            figsize=(4, 2.5), returnfig=True)
+            figsize=(5, 3), returnfig=True)
         
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # 繪製區域
+        # 畫 Premium/Discount 區域
         rect_prem = patches.Rectangle((x_min, eq), x_max-x_min, swing_high-eq, linewidth=0, facecolor='#ef4444', alpha=0.1)
         ax.add_patch(rect_prem)
         rect_disc = patches.Rectangle((x_min, swing_low), x_max-x_min, eq-swing_low, linewidth=0, facecolor='#10b981', alpha=0.1)
         ax.add_patch(rect_disc)
-        ax.axhline(eq, color='#3b82f6', linestyle='-.', linewidth=1, alpha=0.6)
+        ax.axhline(eq, color='#3b82f6', linestyle='--', linewidth=0.8, alpha=0.7)
 
-        # FVG
+        # 畫 FVG
         for fvg in smc['FVG']:
             try:
                 idx = plot_df.index.get_loc(fvg['index'])
@@ -66,22 +67,26 @@ def generate_chart_image(df, ticker, timeframe):
                 ax.add_patch(rect)
             except: pass
 
+        # 存檔
         buf = BytesIO()
-        fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=60)
+        fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=70)
         plt.close(fig)
         buf.seek(0)
-        return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}", swing_high, swing_low, eq
+        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
+        return f"data:image/png;base64,{img_base64}", swing_high, swing_low
     except Exception as e:
+        print(f"Plot Error {ticker}: {e}")
         return None
 
 # --- 3. 主程式 ---
 def main():
-    print("🚀 Starting Analysis Cycle...")
+    print("🚀 Starting Analysis (Force Visual Mode)...")
     
-    # 下載數據
+    # 1. 下載數據
     data_daily = yf.download(ALL_TICKERS + ["SPY"], period="1y", interval="1d", group_by='ticker', progress=False)
     data_hourly = yf.download(ALL_TICKERS, period="1mo", interval="1h", group_by='ticker', progress=False)
     
+    # 處理大盤
     if isinstance(data_daily.columns, pd.MultiIndex):
         spy_close = data_daily['SPY']['Close']
     else:
@@ -92,10 +97,12 @@ def main():
     screener_rows = ""
     passed_count = 0
 
+    # 2. 迴圈分析
     for sector, tickers in SECTORS.items():
         cards_in_sector = ""
         for t in tickers:
             try:
+                # 處理數據結構
                 if isinstance(data_daily.columns, pd.MultiIndex):
                     try:
                         df_d = data_daily[t].dropna()
@@ -103,11 +110,12 @@ def main():
                     except: continue
                 else: continue
 
-                if len(df_d) < 200: continue
+                if len(df_d) < 50: continue
+                
                 curr_price = df_d['Close'].iloc[-1]
                 if isinstance(curr_price, pd.Series): curr_price = curr_price.iloc[0]
 
-                # 篩選邏輯
+                # 計算指標
                 sma200 = df_d['Close'].rolling(200).mean().iloc[-1]
                 if isinstance(sma200, pd.Series): sma200 = sma200.iloc[0]
                 
@@ -120,34 +128,24 @@ def main():
                 if len(combo) > 30:
                     beta = combo['S'].rolling(252).cov(combo['M']).iloc[-1] / combo['M'].rolling(252).var().iloc[-1]
 
+                # 這裡只做標記，不影響畫圖
                 pass_filter = (curr_price > sma200 and vol > 900000000 and beta >= 1.0)
 
-                # 訊號生成 (先不畫圖)
-                window = 20
-                swing_high = df_d['High'].tail(window).max()
-                swing_low = df_d['Low'].tail(window).min()
-                range_len = swing_high - swing_low
-                pos_pct = (curr_price - swing_low) / range_len if range_len > 0 else 0.5
-                signal = "LONG" if pos_pct < 0.4 else "WAIT"
+                # --- ⚠️ 強制畫圖 (不管有沒有訊號) ---
+                res_d = generate_chart_image(df_d, t, "Daily")
+                if not res_d: continue
+                img_d_src, tp, sl = res_d
+                
+                res_h = generate_chart_image(df_h if not df_h.empty else df_d, t, "Hourly")
+                img_h_src = res_h[0] if res_h else ""
+
+                # 計算訊號
+                range_len = tp - sl
+                pos_pct = (curr_price - sl) / range_len if range_len > 0 else 0.5
+                signal = "LONG" if pos_pct < 0.45 else "WAIT" # 放寬一點標準到 0.45
                 cls = "b-long" if signal == "LONG" else "b-wait"
 
-                # 優化：只對重要的股票畫圖
-                should_draw = pass_filter or (signal == "LONG")
-                img_d_src, img_h_src = "", ""
-                
-                if should_draw:
-                    res_d = generate_chart_image(df_d, t, "D1")
-                    if res_d:
-                        img_d_src, tp, sl, eq = res_d
-                        res_h = generate_chart_image(df_h if not df_h.empty else df_d, t, "H1")
-                        if res_h: img_h_src = res_h[0]
-                    else:
-                        # 如果畫圖失敗，補上預設值防止報錯
-                        tp, sl, eq = swing_high, swing_low, (swing_high+swing_low)/2
-                else:
-                    tp, sl, eq = swing_high, swing_low, (swing_high+swing_low)/2
-
-                # AI 文案
+                # AI 分析文案
                 deploy_html = ""
                 if signal == "LONG":
                     entry = curr_price
@@ -159,34 +157,38 @@ def main():
                     <div class='deploy-box long'>
                         <div class='deploy-title'>✅ LONG SETUP</div>
                         <ul class='deploy-list'>
-                            <li><b>Entry:</b> ${entry:.2f}</li>
-                            <li><b>SL:</b> ${stop_loss:.2f}</li>
-                            <li><b>TP:</b> ${take_profit:.2f}</li>
-                            <li><b>RR:</b> {rr:.1f}R</li>
+                            <li><b>Price:</b> ${entry:.2f} (Discount Zone)</li>
+                            <li><b>Stop Loss:</b> ${stop_loss:.2f} (SSL)</li>
+                            <li><b>Target:</b> ${take_profit:.2f} (BSL)</li>
+                            <li><b>R:R Ratio:</b> {rr:.1f}R</li>
                         </ul>
                     </div>
                     """
                 else:
+                    eq = (tp + sl) / 2
+                    target_buy = sl + (range_len * 0.4)
                     deploy_html = f"""
                     <div class='deploy-box wait'>
-                        <div class='deploy-title'>⏳ WAIT</div>
+                        <div class='deploy-title'>⏳ WAIT / WATCH</div>
                         <ul class='deploy-list'>
-                            <li>Price in Premium.</li>
-                            <li>Wait for pullback to ${eq:.2f}.</li>
+                            <li>Price is in <b>Premium</b>.</li>
+                            <li>Wait for drop below: <b>${target_buy:.2f}</b></li>
+                            <li>Equilibrium: ${eq:.2f}</li>
                         </ul>
                     </div>
                     """
                 
-                # HTML 轉義
+                # 清理字串
                 deploy_clean = deploy_html.replace('"', '&quot;').replace('\n', '')
 
+                # 建立卡片
                 cards_in_sector += f"""
                 <div class="card" onclick="openModal('{t}', '{img_d_src}', '{img_h_src}', '{signal}', '{deploy_clean}')">
                     <div class="head">
                         <div><div class="code">{t}</div><div class="price">${curr_price:.2f}</div></div>
                         <span class="badge {cls}">{signal}</span>
                     </div>
-                    <div class="hint">Tap for Strategy ↗</div>
+                    <div class="hint">Tap for Chart & Plan</div>
                 </div>
                 """
                 
@@ -195,19 +197,20 @@ def main():
                     screener_rows += f"<tr><td>{t}</td><td>${curr_price:.2f}</td><td class='g'>Pass</td><td>{beta:.2f}</td><td><span class='badge {cls}'>{signal}</span></td></tr>"
 
             except Exception as e:
+                print(f"Error processing {t}: {e}")
                 continue
         
         if cards_in_sector:
             sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards_in_sector}</div>"
 
-    # 生成 index.html
+    # 生成 HTML
     final_html = f"""
     <!DOCTYPE html>
     <html>
     <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>DailyDip AI Report</title>
+    <title>DailyDip Visual Report</title>
     <style>
         :root {{ --bg:#0f172a; --card:#1e293b; --text:#f8fafc; --acc:#3b82f6; --g:#10b981; --r:#ef4444; --y:#fbbf24; }}
         body {{ background:var(--bg); color:var(--text); font-family:sans-serif; margin:0; padding:10px; }}
@@ -216,15 +219,15 @@ def main():
         .tab.active {{ background:var(--acc); color:white; }}
         .content {{ display:none; }} .content.active {{ display:block; }}
         .sector-title {{ border-left:4px solid var(--acc); padding-left:10px; margin:20px 0 10px; font-size:1.1rem; }}
-        .grid {{ display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }}
-        .card {{ background:var(--card); border:1px solid #333; border-radius:8px; padding:12px; cursor:pointer; }}
+        .grid {{ display:grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap:10px; }}
+        .card {{ background:var(--card); border:1px solid #333; border-radius:8px; padding:10px; cursor:pointer; }}
         .head {{ display:flex; justify-content:space-between; margin-bottom:5px; }}
-        .code {{ font-weight:900; font-size:1.1rem; }} .price {{ color:#94a3b8; font-family:monospace; }}
-        .badge {{ padding:2px 6px; border-radius:4px; font-size:0.8rem; font-weight:bold; }}
-        .b-long {{ background:rgba(16,185,129,0.2); color:var(--g); }}
-        .b-wait {{ background:rgba(148,163,184,0.1); color:#94a3b8; }}
+        .code {{ font-weight:900; font-size:1rem; }} .price {{ color:#94a3b8; font-family:monospace; }}
+        .badge {{ padding:2px 6px; border-radius:4px; font-size:0.7rem; font-weight:bold; }}
+        .b-long {{ background:rgba(16,185,129,0.2); color:var(--g); border:1px solid var(--g); }}
+        .b-wait {{ background:rgba(148,163,184,0.1); color:#94a3b8; border:1px solid #555; }}
         .hint {{ font-size:0.7rem; color:var(--acc); text-align:right; margin-top:5px; opacity:0.8; }}
-        table {{ width:100%; border-collapse:collapse; font-size:0.9rem; }}
+        table {{ width:100%; border-collapse:collapse; font-size:0.85rem; }}
         th, td {{ padding:8px; text-align:left; border-bottom:1px solid #333; }}
         .g {{ color:var(--g); }}
         
@@ -236,31 +239,39 @@ def main():
         .deploy-box.wait {{ background:rgba(251,191,36,0.1); border-color:var(--y); }}
         .deploy-title {{ font-weight:bold; margin-bottom:5px; color:white; }}
         .deploy-list {{ margin:0; padding-left:20px; color:#cbd5e1; font-size:0.9rem; }}
-        .close-btn {{ width:100%; padding:10px; background:var(--acc); border:none; color:white; border-radius:6px; cursor:pointer; font-weight:bold; font-size:1rem; }}
-        .time {{ text-align:center; color:#666; font-size:0.8rem; margin-top:20px; }}
-        .no-chart {{ padding:20px; text-align:center; color:#64748b; border:1px dashed #333; border-radius:6px; margin-bottom:10px; font-size:0.8rem; }}
+        .close-btn {{ width:100%; padding:12px; background:var(--acc); border:none; color:white; border-radius:6px; cursor:pointer; font-weight:bold; font-size:1rem; }}
+        .time {{ text-align:center; color:#666; font-size:0.7rem; margin-top:30px; }}
+        .chart-lbl {{ color:var(--acc); font-weight:bold; display:block; margin-bottom:5px; font-size:0.9rem; }}
     </style>
     </head>
     <body>
         <div class="tabs">
-            <div class="tab active" onclick="setTab('overview', this)">Overview</div>
-            <div class="tab" onclick="setTab('screener', this)">Screener ({passed_count})</div>
+            <div class="tab active" onclick="setTab('overview', this)">📊 Market</div>
+            <div class="tab" onclick="setTab('screener', this)">🔍 Screener ({passed_count})</div>
         </div>
         
         <div id="overview" class="content active">{sector_html_blocks}</div>
         
         <div id="screener" class="content">
-            <table><thead><tr><th>Ticker</th><th>Price</th><th>Trend</th><th>Beta</th><th>Signal</th></tr></thead><tbody>{screener_rows}</tbody></table>
+            <table><thead><tr><th>Ticker</th><th>Price</th><th>Status</th><th>Beta</th><th>Signal</th></tr></thead><tbody>{screener_rows}</tbody></table>
         </div>
         
-        <div class="time">Last Update: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}</div>
+        <div class="time">Updated: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}</div>
 
         <div id="modal" class="modal" onclick="document.getElementById('modal').style.display='none'">
             <div class="m-content" onclick="event.stopPropagation()">
                 <h2 id="m-ticker" style="margin-top:0"></h2>
                 <div id="m-deploy"></div>
-                <div id="chart-d"></div>
-                <div id="chart-h"></div>
+                
+                <div>
+                    <span class="chart-lbl">📅 Daily Chart (Trend)</span>
+                    <div id="chart-d"></div>
+                </div>
+                <div style="margin-top:15px;">
+                    <span class="chart-lbl">⏱️ Hourly Chart (Entry)</span>
+                    <div id="chart-h"></div>
+                </div>
+                
                 <button class="close-btn" onclick="document.getElementById('modal').style.display='none'">Close</button>
             </div>
         </div>
@@ -277,14 +288,8 @@ def main():
             document.getElementById('m-ticker').innerText = t + " (" + s + ")";
             document.getElementById('m-deploy').innerHTML = html;
             
-            let cd = document.getElementById('chart-d');
-            let ch = document.getElementById('chart-h');
-            
-            if(d) cd.innerHTML = '<div><b style="color:#3b82f6">Daily Chart</b><br><img src="'+d+'"></div>';
-            else cd.innerHTML = '<div class="no-chart">Daily Chart not loaded (Optimized)</div>';
-            
-            if(h) ch.innerHTML = '<div><b style="color:#3b82f6">Hourly Chart</b><br><img src="'+h+'"></div>';
-            else ch.innerHTML = '<div class="no-chart">Hourly Chart not loaded (Optimized)</div>';
+            document.getElementById('chart-d').innerHTML = d ? '<img src="'+d+'">' : '<div style="padding:20px;text-align:center;color:#666">No Chart Data</div>';
+            document.getElementById('chart-h').innerHTML = h ? '<img src="'+h+'">' : '<div style="padding:20px;text-align:center;color:#666">No Chart Data</div>';
         }}
         </script>
     </body>
