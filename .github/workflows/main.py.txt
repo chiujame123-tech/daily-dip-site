@@ -1,0 +1,228 @@
+import yfinance as yf
+import mplfinance as mpf
+import pandas as pd
+import numpy as np
+import base64
+from io import BytesIO
+import matplotlib.pyplot as plt
+import matplotlib.patches as patches
+from datetime import datetime
+
+# --- 設定 ---
+SECTORS = {
+    "💎 Mag 7 & AI": ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "AMD", "AVGO"],
+    "⚡ Semiconductor": ["TSM", "ASML", "AMAT", "MU", "INTC", "ARM"],
+    "☁️ Software": ["PLTR", "COIN", "MSTR", "CRM", "SNOW"],
+    "🏦 Finance": ["JPM", "V", "COST", "MCD", "NKE"],
+}
+ALL_TICKERS = [t for sector in SECTORS.values() for t in sector]
+
+# --- 核心邏輯 (與之前相同，但移除了 try-except 的干擾以確保報錯時我們知道) ---
+def generate_chart_image(df, ticker, timeframe):
+    try:
+        plot_df = df.tail(60)
+        if len(plot_df) < 30: return None
+        
+        swing_high = plot_df['High'].max()
+        swing_low = plot_df['Low'].min()
+        eq = (swing_high + swing_low) / 2
+        
+        mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
+        s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#334155', facecolor='#1e293b')
+        
+        # 縮小尺寸以節省空間
+        fig, axlist = mpf.plot(plot_df, type='candle', style=s, volume=False,
+            title=dict(title=f"{ticker} - {timeframe}", color='white', size=10),
+            figsize=(4, 2.5), returnfig=True)
+        
+        # 簡單標記
+        ax = axlist[0]
+        x_min, x_max = ax.get_xlim()
+        rect_prem = patches.Rectangle((x_min, eq), x_max-x_min, swing_high-eq, linewidth=0, facecolor='#ef4444', alpha=0.1)
+        ax.add_patch(rect_prem)
+        rect_disc = patches.Rectangle((x_min, swing_low), x_max-x_min, eq-swing_low, linewidth=0, facecolor='#10b981', alpha=0.1)
+        ax.add_patch(rect_disc)
+        
+        buf = BytesIO()
+        fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=60)
+        plt.close(fig)
+        buf.seek(0)
+        return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}", swing_high, swing_low
+    except:
+        return None
+
+def main():
+    print("🚀 Starting Analysis...")
+    
+    # 下載數據
+    data_daily = yf.download(ALL_TICKERS + ["SPY"], period="1y", interval="1d", group_by='ticker', progress=False)
+    data_hourly = yf.download(ALL_TICKERS, period="1mo", interval="1h", group_by='ticker', progress=False)
+    
+    # 處理 SPY
+    if isinstance(data_daily.columns, pd.MultiIndex):
+        spy_ret = data_daily['SPY']['Close'].pct_change()
+    else:
+        spy_ret = data_daily['Close'].pct_change()
+
+    sector_html_blocks = ""
+    screener_rows = ""
+    passed_count = 0
+
+    for sector, tickers in SECTORS.items():
+        cards_in_sector = ""
+        for t in tickers:
+            try:
+                if isinstance(data_daily.columns, pd.MultiIndex):
+                    try:
+                        df_d = data_daily[t].dropna()
+                        df_h = data_hourly[t].dropna()
+                    except: continue
+                else: continue
+
+                if len(df_d) < 200: continue
+                curr_price = df_d['Close'].iloc[-1]
+                if isinstance(curr_price, pd.Series): curr_price = curr_price.iloc[0]
+
+                # 篩選邏輯
+                sma200 = df_d['Close'].rolling(200).mean().iloc[-1]
+                if isinstance(sma200, pd.Series): sma200 = sma200.iloc[0]
+                
+                vol = (df_d['Close'] * df_d['Volume']).rolling(21).mean().iloc[-1] * 21
+                if isinstance(vol, pd.Series): vol = vol.iloc[0]
+                
+                stock_ret = df_d['Close'].pct_change()
+                combo = pd.DataFrame({'S': stock_ret, 'M': spy_ret}).dropna()
+                beta = 0
+                if len(combo) > 30:
+                    beta = combo['S'].rolling(252).cov(combo['M']).iloc[-1] / combo['M'].rolling(252).var().iloc[-1]
+
+                pass_filter = (curr_price > sma200 and vol > 900000000 and beta >= 1.0)
+
+                # 訊號
+                tp = df_d['High'].tail(20).max()
+                sl = df_d['Low'].tail(20).min()
+                range_len = tp - sl
+                pos_pct = (curr_price - sl) / range_len if range_len > 0 else 0.5
+                signal = "LONG" if pos_pct < 0.4 else "WAIT"
+                cls = "b-long" if signal == "LONG" else "b-wait"
+
+                # 畫圖邏輯 (只畫重要的)
+                should_draw = pass_filter or (signal == "LONG")
+                img_d_src, img_h_src = "", ""
+                
+                if should_draw:
+                    res_d = generate_chart_image(df_d, t, "D1")
+                    if res_d: 
+                        img_d_src, _, _ = res_d
+                        res_h = generate_chart_image(df_h if not df_h.empty else df_d, t, "H1")
+                        if res_h: img_h_src = res_h[0]
+
+                # HTML 生成
+                trend_st = "Bullish" if curr_price > sma200 else "Bearish"
+                deploy_html = ""
+                if signal == "LONG":
+                    deploy_html = f"✅ <b>Action:</b> Buy (Discount)<br>TP: ${tp:.2f} | SL: ${sl:.2f}"
+                else:
+                    deploy_html = f"⏳ <b>Action:</b> Wait<br>Price in Premium"
+
+                cards_in_sector += f"""
+                <div class="card" onclick="openModal('{t}', '{img_d_src}', '{img_h_src}', '{signal}', '{deploy_html}')">
+                    <div class="head">
+                        <div><div class="code">{t}</div><div class="price">${curr_price:.2f}</div></div>
+                        <span class="badge {cls}">{signal}</span>
+                    </div>
+                    <div class="hint">Tap for Chart</div>
+                </div>
+                """
+                
+                if pass_filter:
+                    passed_count += 1
+                    screener_rows += f"<tr><td>{t}</td><td>${curr_price:.2f}</td><td class='g'>Pass</td><td>{beta:.2f}</td><td><span class='badge {cls}'>{signal}</span></td></tr>"
+
+            except Exception as e:
+                continue
+        
+        if cards_in_sector:
+            sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards_in_sector}</div>"
+
+    # 最終 HTML 模板 (包含 CSS/JS)
+    final_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>DailyDip AI Report</title>
+    <style>
+        :root {{ --bg:#0f172a; --card:#1e293b; --text:#f8fafc; --acc:#3b82f6; --g:#10b981; }}
+        body {{ background:var(--bg); color:var(--text); font-family:sans-serif; margin:0; padding:10px; }}
+        .tabs {{ display:flex; gap:10px; padding-bottom:10px; margin-bottom:15px; border-bottom:1px solid #333; }}
+        .tab {{ padding:8px 16px; background:#334155; border-radius:6px; cursor:pointer; font-weight:bold; }}
+        .tab.active {{ background:var(--acc); color:white; }}
+        .content {{ display:none; }} .content.active {{ display:block; }}
+        .sector-title {{ border-left:4px solid var(--acc); padding-left:10px; margin:20px 0 10px; }}
+        .grid {{ display:grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap:10px; }}
+        .card {{ background:var(--card); border:1px solid #333; border-radius:8px; padding:12px; cursor:pointer; }}
+        .head {{ display:flex; justify-content:space-between; margin-bottom:5px; }}
+        .code {{ font-weight:900; }} .price {{ color:#94a3b8; font-family:monospace; }}
+        .badge {{ padding:2px 6px; border-radius:4px; font-size:0.8rem; font-weight:bold; }}
+        .b-long {{ background:rgba(16,185,129,0.2); color:var(--g); }}
+        .b-wait {{ background:rgba(148,163,184,0.1); color:#94a3b8; }}
+        table {{ width:100%; border-collapse:collapse; font-size:0.9rem; }}
+        th, td {{ padding:8px; text-align:left; border-bottom:1px solid #333; }}
+        .modal {{ display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); z-index:99; justify-content:center; align-items:start; overflow-y:auto; padding:20px; }}
+        .m-content {{ background:var(--card); width:100%; max-width:600px; padding:15px; border-radius:12px; margin-top:20px; border:1px solid #555; }}
+        .m-content img {{ width:100%; border-radius:6px; margin-bottom:10px; }}
+        .close-btn {{ width:100%; padding:10px; background:var(--acc); border:none; color:white; border-radius:6px; cursor:pointer; font-weight:bold; }}
+        .time {{ text-align:center; color:#666; font-size:0.8rem; margin-top:20px; }}
+    </style>
+    </head>
+    <body>
+        <div class="tabs">
+            <div class="tab active" onclick="setTab('overview', this)">Overview</div>
+            <div class="tab" onclick="setTab('screener', this)">Screener ({passed_count})</div>
+        </div>
+        <div id="overview" class="content active">{sector_html_blocks}</div>
+        <div id="screener" class="content">
+            <table><thead><tr><th>Ticker</th><th>Price</th><th>Status</th><th>Beta</th><th>Signal</th></tr></thead><tbody>{screener_rows}</tbody></table>
+        </div>
+        <div class="time">Last Update: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}</div>
+
+        <div id="modal" class="modal" onclick="document.getElementById('modal').style.display='none'">
+            <div class="m-content" onclick="event.stopPropagation()">
+                <h2 id="m-ticker" style="margin-top:0"></h2>
+                <div id="m-deploy" style="margin-bottom:15px; padding:10px; background:#0f172a; border-radius:6px;"></div>
+                <div id="chart-container"></div>
+                <button class="close-btn" onclick="document.getElementById('modal').style.display='none'">Close</button>
+            </div>
+        </div>
+
+        <script>
+        function setTab(id, el) {{
+            document.querySelectorAll('.content').forEach(c => c.classList.remove('active'));
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+            el.classList.add('active');
+        }}
+        function openModal(t, d, h, s, html) {{
+            document.getElementById('modal').style.display = 'flex';
+            document.getElementById('m-ticker').innerText = t + " (" + s + ")";
+            document.getElementById('m-deploy').innerHTML = html;
+            let c = document.getElementById('chart-container');
+            c.innerHTML = '';
+            if(d) c.innerHTML += '<div><b>Daily</b><br><img src="'+d+'"></div>';
+            else c.innerHTML += '<div style="padding:20px;text-align:center;color:#666">Chart not loaded (Optimization)</div>';
+            if(h) c.innerHTML += '<div><b>Hourly</b><br><img src="'+h+'"></div>';
+        }}
+        </script>
+    </body>
+    </html>
+    """
+    
+    # 關鍵：將結果寫入 index.html
+    with open("index.html", "w", encoding="utf-8") as f:
+        f.write(final_html)
+    print("✅ index.html generated successfully!")
+
+if __name__ == "__main__":
+    main()
