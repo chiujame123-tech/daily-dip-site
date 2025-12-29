@@ -1,8 +1,6 @@
-flask
-gunicorn
+streamlit
 yfinance
 mplfinance
 pandas
 numpy
 matplotlib
-appdirs
