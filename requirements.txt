@@ -1,1 +1,8 @@
-
+flask
+gunicorn
+yfinance
+mplfinance
+pandas
+numpy
+matplotlib
+appdirs
