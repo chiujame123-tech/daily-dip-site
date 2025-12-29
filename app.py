@@ -1,10 +1,9 @@
-# --- 步驟 0: 安裝必要套件 ---
+# --- 步驟 0: 強制安裝必要套件 ---
 import sys
 import subprocess
-print("⚙️ 正在安裝必要套件...")
+print("⚙️ 正在檢查並安裝必要套件...")
 subprocess.check_call([sys.executable, "-m", "pip", "install", "yfinance", "mplfinance"])
-print("✅ 安裝完成！\n")
-
+print("✅ 套件準備完成！\n")
 
 import yfinance as yf
 import mplfinance as mpf
@@ -14,344 +13,262 @@ import base64
 from io import BytesIO
 from IPython.display import display, HTML
 import matplotlib.pyplot as plt
-import matplotlib.patches as patches
 
+# --- 1. 設定觀察清單 (100+ 檔熱門美股) ---
+# 包含七巨頭、半導體、SaaS、金融、傳產龍頭
+tickers = [
+    # Mag 7 & Tech Giants
+    "NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "AMD", "NFLX", "AVGO",
+    "ORCL", "CRM", "ADBE", "INTC", "CSCO", "QCOM", "TXN", "IBM", "UBER", "ABNB",
+    "PLTR", "NOW", "SNOW", "PANW", "CRWD", "PALW", "SQ", "SHOP", "COIN", "MSTR",
+    "HOOD", "DKNG", "RBLX", "U", "TTD", "NET", "ZM", "DOCU", "TEAM", "MDB",
+    # Semiconductor
+    "TSM", "ASML", "AMAT", "LRCX", "MU", "ADI", "NXPI", "MRVL", "KLAC", "ON",
+    "GGFS", "INTC", "STM", "ARM", "SMCI",
+    # Finance & Payments
+    "JPM", "BAC", "WFC", "C", "GS", "MS", "BLK", "V", "MA", "AXP", "PYPL", "COF",
+    # Healthcare
+    "LLY", "JNJ", "UNH", "ABBV", "MRK", "PFE", "TMO", "DHR", "ISRG", "VRTX", "REGN",
+    # Consumer & Retail
+    "WMT", "COST", "TGT", "HD", "LOW", "MCD", "SBUX", "NKE", "LULU", "CMG", "KO", "PEP", "PG",
+    # Industrial & Energy
+    "XOM", "CVX", "COP", "SLB", "GE", "CAT", "DE", "BA", "LMT", "RTX", "HON", "UPS", "UNP",
+    # Entertainment & Comm
+    "DIS", "CMCSA", "TMUS", "VZ", "T", "SPOT"
+]
 
-# --- 1. 設定板塊與觀察清單 ---
-SECTORS = {
-    "💎 Magnificent 7 & AI": ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META", "AMD", "AVGO"],
-    "⚡ Semiconductor": ["TSM", "ASML", "AMAT", "MU", "INTC", "ARM"],
-    "☁️ Software & Crypto": ["PLTR", "COIN", "MSTR", "CRM", "SNOW"],
-    "🏦 Finance & Retail": ["JPM", "V", "COST", "MCD", "NKE"],
-}
-ALL_TICKERS = [t for sector in SECTORS.values() for t in sector]
+# 確保不重複
+tickers = list(set(tickers))
 
-
-# --- 2. 篩選參數 ---
+# --- 2. 篩選條件 (Strict Filters) ---
 FILTER_SMA_PERIOD = 200
-FILTER_MIN_CAP = 2000000000
-FILTER_MIN_MONTHLY_VOL = 900000000
-FILTER_MIN_BETA = 1.0
+FILTER_MIN_CAP = 2000000000        # 2 Billion USD
+FILTER_MIN_MONTHLY_VOL = 900000000 # 900 Million USD
+FILTER_MIN_BETA = 1.0              # Beta >= 1
 
+# --- 3. 核心功能 ---
 
-# --- 3. SMC 核心識別邏輯 ---
-def identify_smc_features(df):
-    """識別 FVG, EQH/EQL, Displacement"""
-    features = {"FVG": [], "EQH": [], "EQL": [], "DISP": []}
-    
-    # 1. 識別 Displacement (大於平均實體 2.5 倍)
-    df['Body'] = abs(df['Close'] - df['Open'])
-    avg_body = df['Body'].rolling(20).mean()
-    features['DISP'] = df.index[df['Body'] > avg_body * 2.5].tolist()
-
-
-    # 2. 識別 FVG (Fair Value Gaps)
-    # 只需要找最近的幾個即可，避免圖表太亂
-    for i in range(2, len(df)):
-        # Bullish FVG: Low[i] > High[i-2]
-        if df['Low'].iloc[i] > df['High'].iloc[i-2]:
-            features['FVG'].append({
-                'type': 'Bullish',
-                'top': df['Low'].iloc[i],
-                'bottom': df['High'].iloc[i-2],
-                'index': df.index[i-1] # 畫在中間那根
-            })
-        # Bearish FVG: High[i] < Low[i-2]
-        elif df['High'].iloc[i] < df['Low'].iloc[i-2]:
-            features['FVG'].append({
-                'type': 'Bearish',
-                'top': df['Low'].iloc[i-2],
-                'bottom': df['High'].iloc[i],
-                'index': df.index[i-1]
-            })
-
-
-    # 3. 識別 EQH / EQL (簡單版：尋找最近 30 根 K 線內的近似高低點)
-    # 這裡我們只標示顯著的 Swing High/Low
-    window = 5
-    df['IsPivotHigh'] = df['High'] == df['High'].rolling(window*2+1, center=True).max()
-    df['IsPivotLow'] = df['Low'] == df['Low'].rolling(window*2+1, center=True).min()
-    
-    highs = df[df['IsPivotHigh']]['High']
-    lows = df[df['IsPivotLow']]['Low']
-    
-    # 檢查是否有價位非常接近的 (Equal Highs/Lows)
-    threshold = 0.002 # 0.2% 誤差
-    
-    # 檢查 EQH
-    checked_highs = []
-    for date, price in highs.items():
-        for date2, price2 in highs.items():
-            if date == date2: continue
-            if abs(price - price2) / price < threshold:
-                # 避免重複標記
-                if not any(abs(h - price)/price < threshold for h in checked_highs):
-                    features['EQH'].append({'price': (price+price2)/2, 'date': max(date, date2)})
-                    checked_highs.append(price)
-    
-    # 檢查 EQL
-    checked_lows = []
-    for date, price in lows.items():
-        for date2, price2 in lows.items():
-            if date == date2: continue
-            if abs(price - price2) / price < threshold:
-                if not any(abs(l - price)/price < threshold for l in checked_lows):
-                    features['EQL'].append({'price': (price+price2)/2, 'date': max(date, date2)})
-                    checked_lows.append(price)
-                    
-    return features
-
-
-# --- 4. 繪圖核心函式 (Visualizing SMC) ---
-def generate_chart_image(df, ticker, timeframe):
+def generate_chart_base64(df, ticker):
     try:
-        plot_df = df.tail(60) # 只畫最後 60 根
-        if len(plot_df) < 30: return None, 0, 0
+        window = 20
+        if len(df) < window: return None, 0, 0
         
-        # 基礎 SMC 結構
-        swing_high = plot_df['High'].max()
-        swing_low = plot_df['Low'].min()
-        eq = (swing_high + swing_low) / 2
+        swing_high = df['High'].tail(window).max()
+        swing_low = df['Low'].tail(window).min()
+        current_price = df['Close'].iloc[-1]
         
-        # 識別進階 SMC 特徵 (基於這 60 根)
-        smc = identify_smc_features(plot_df)
-        
-        # 風格設定
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
         s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#334155', facecolor='#1e293b')
+        hlines = dict(hlines=[swing_high, swing_low], colors=['#ef4444', '#10b981'], linewidths=[1, 1], linestyle='--')
+
+        fig, _ = mpf.plot(df.tail(60), type='candle', style=s, volume=False,
+            title=dict(title=f"{ticker}", color='white', size=10),
+            hlines=hlines, figsize=(4, 2.5), returnfig=True) # 縮小尺寸以適應大量圖片
         
-        # 繪圖
-        fig, axlist = mpf.plot(plot_df, type='candle', style=s, volume=False,
-            title=dict(title=f"{ticker} - {timeframe} (SMC Smart Money)", color='white', size=11),
-            figsize=(8, 5), returnfig=True)
-        
-        ax = axlist[0]
-        x_min, x_max = ax.get_xlim()
-        
-        # --- A. Premium vs Discount Zones (背景色) ---
-        # Premium (上層) - 淡淡的紅色
-        rect_prem = patches.Rectangle((x_min, eq), x_max-x_min, swing_high-eq, linewidth=0, facecolor='#ef4444', alpha=0.1)
-        ax.add_patch(rect_prem)
-        ax.text(x_min+1, swing_high, "PREMIUM (Sell)", color='#fca5a5', fontsize=8, verticalalignment='top', fontweight='bold', alpha=0.7)
-        
-        # Discount (下層) - 淡淡的綠色
-        rect_disc = patches.Rectangle((x_min, swing_low), x_max-x_min, eq-swing_low, linewidth=0, facecolor='#10b981', alpha=0.1)
-        ax.add_patch(rect_disc)
-        ax.text(x_min+1, swing_low, "DISCOUNT (Buy)", color='#86efac', fontsize=8, verticalalignment='bottom', fontweight='bold', alpha=0.7)
-        
-        # EQ Line
-        ax.axhline(eq, color='#3b82f6', linestyle='-.', linewidth=1, alpha=0.6)
-        
-        # --- B. FVG (Fair Value Gaps) ---
-        for fvg in smc['FVG']:
-            # 找到該 FVG 在圖表上的 x 座標
-            try:
-                idx = plot_df.index.get_loc(fvg['index'])
-                # 畫矩形延伸到右邊
-                color = '#10b981' if fvg['type'] == 'Bullish' else '#ef4444'
-                rect = patches.Rectangle((idx, fvg['bottom']), x_max-idx, fvg['top']-fvg['bottom'], linewidth=0, facecolor=color, alpha=0.3)
-                ax.add_patch(rect)
-            except: pass
-
-
-        # --- C. EQH / EQL ---
-        for eqh in smc['EQH']:
-             ax.axhline(eqh['price'], color='white', linestyle=':', linewidth=1.5)
-             ax.text(x_max-2, eqh['price'], "EQH (Liq.)", color='white', fontsize=7, fontweight='bold', backgroundcolor='#333')
-
-
-        for eql in smc['EQL']:
-             ax.axhline(eql['price'], color='white', linestyle=':', linewidth=1.5)
-             ax.text(x_max-2, eql['price'], "EQL (Liq.)", color='white', fontsize=7, fontweight='bold', backgroundcolor='#333')
-
-
-        # --- D. Displacement (標記大動能 K 線) ---
-        for disp_date in smc['DISP']:
-            if disp_date in plot_df.index:
-                idx = plot_df.index.get_loc(disp_date)
-                high_val = plot_df.loc[disp_date]['High']
-                ax.text(idx, high_val*1.01, "Disp.", color='#fbbf24', fontsize=6, ha='center')
-
-
-        # 存檔
         buf = BytesIO()
         fig.savefig(buf, format='png', bbox_inches='tight', transparent=True)
         plt.close(fig)
         buf.seek(0)
         return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}", swing_high, swing_low
-    except Exception as e:
-        print(f"Chart Error {ticker}: {e}")
+    except:
         return None, 0, 0
 
-
-# --- 5. 數據下載與處理 ---
-print(f"🚀 正在下載數據...")
-data_daily = yf.download(ALL_TICKERS + ["SPY"], period="1y", group_by='ticker', progress=True)
-data_hourly = yf.download(ALL_TICKERS, period="1mo", interval="1h", group_by='ticker', progress=True)
-spy_ret = data_daily['SPY']['Close'].pct_change()
-
-
-print("\n🔍 正在進行 SMC 深度分析...")
-
-
-sector_html_blocks = ""
-passed_count = 0
-screener_rows = ""
-
-
-for sector, tickers in SECTORS.items():
-    cards_in_sector = ""
-    for t in tickers:
+def get_market_caps(ticker_list):
+    # 由於 yf.download 不含市值，我們需要單獨抓取
+    # 為了速度，這裡使用簡單迴圈，但只抓 info
+    caps = {}
+    print(f"   Fetching Market Caps for {len(ticker_list)} stocks...")
+    for t in ticker_list:
         try:
-            df_d = data_daily[t].dropna()
-            df_h = data_hourly[t].dropna()
-            if len(df_d) < 200: continue
+            caps[t] = yf.Ticker(t).info.get('marketCap', 0)
+        except:
+            caps[t] = 0
+    return caps
+
+# --- 4. 主程式 ---
+print(f"🚀 正在下載 100+ 檔股票數據 ({len(tickers)} Tickers)...")
+
+# 1. 批量下載價格數據 (大幅加速)
+data = yf.download(tickers + ["SPY"], period="1y", group_by='ticker', progress=True)
+
+print("🔍 正在進行技術分析與篩選 (SMC + Screener)...")
+
+# 準備大盤數據算 Beta
+spy_close = data['SPY']['Close']
+spy_ret = spy_close.pct_change()
+
+# 抓取市值 (這步比較慢，需耐心等待)
+market_caps = get_market_caps(tickers)
+
+smc_cards_html = ""
+screener_rows_html = ""
+passed_count = 0
+
+for t in tickers:
+    try:
+        df = data[t].dropna()
+        if df.empty or len(df) < 200: continue
+        
+        current_price = df['Close'].iloc[-1]
+        
+        # --- 計算指標 ---
+        # 1. SMA 200
+        sma200 = df['Close'].rolling(200).mean().iloc[-1]
+        
+        # 2. Beta
+        stock_ret = df['Close'].pct_change()
+        # 對齊索引
+        aligned_data = pd.DataFrame({'Stock': stock_ret, 'Market': spy_ret}).dropna()
+        if len(aligned_data) < 30: 
+            beta = 0
+        else:
+            cov = aligned_data['Stock'].rolling(252).cov(aligned_data['Market']).iloc[-1]
+            var = aligned_data['Market'].rolling(252).var().iloc[-1]
+            beta = cov / var if var != 0 else 0
             
-            current_price = df_d['Close'].iloc[-1]
+        # 3. 月成交額
+        dollar_vol = (df['Close'] * df['Volume']).rolling(21).mean().iloc[-1] * 21
+        
+        # 4. 市值
+        mkt_cap = market_caps.get(t, 0)
+        
+        # --- 判斷篩選條件 ---
+        pass_filter = (
+            current_price > sma200 and
+            mkt_cap > FILTER_MIN_CAP and
+            dollar_vol > FILTER_MIN_MONTHLY_VOL and
+            beta >= FILTER_MIN_BETA
+        )
+        
+        # --- 生成 SMC 圖表與信號 ---
+        img_src, tp, sl = generate_chart_base64(df, t)
+        if not img_src: continue
+        
+        s_low, s_high = sl, tp
+        range_len = s_high - s_low
+        pos_pct = (current_price - s_low) / range_len if range_len > 0 else 0.5
+        
+        signal = "LONG" if pos_pct < 0.4 else "WAIT"
+        cls = "b-long" if signal == "LONG" else "b-wait"
+        
+        # 生成 SMC 卡片 HTML
+        # 交易計畫
+        rr = (tp - current_price) / (current_price - sl*0.98) if (current_price - sl*0.98) > 0 else 0
+        setup_html = ""
+        if signal == "LONG":
+            setup_html = f"<div class='plan'>TP: <span class='g'>${tp:.1f}</span> | RR: <span class='y'>{rr:.1f}R</span></div>"
+        
+        smc_cards_html += f"""
+        <div class="card" onclick="openModal('{img_src}', '{t}')">
+            <div class="head"><b>{t}</b> <span class="badge {cls}">{signal}</span></div>
+            <div class="price">${current_price:.2f}</div>
+            {setup_html}
+        </div>"""
+        
+        # 生成篩選器表格行 (只顯示通過的)
+        if pass_filter:
+            passed_count += 1
+            vol_str = f"${dollar_vol/1e6:.0f}M"
+            cap_str = f"${mkt_cap/1e9:.1f}B"
+            screener_rows_html += f"""
+            <tr>
+                <td><b>{t}</b></td>
+                <td>${current_price:.2f}</td>
+                <td class="g">Above</td>
+                <td>{beta:.2f}</td>
+                <td>{vol_str}</td>
+                <td>{cap_str}</td>
+                <td><span class="badge {cls}">{signal}</span></td>
+            </tr>"""
             
-            # 篩選條件
-            sma200 = df_d['Close'].rolling(200).mean().iloc[-1]
-            dollar_vol = (df_d['Close'] * df_d['Volume']).rolling(21).mean().iloc[-1] * 21
-            combo = pd.DataFrame({'S': df_d['Close'].pct_change(), 'M': spy_ret}).dropna()
-            beta = combo['S'].cov(combo['M']) / combo['M'].var() if len(combo)>30 else 0
-            
-            pass_filter = (current_price > sma200 and dollar_vol > FILTER_MIN_MONTHLY_VOL and beta >= FILTER_MIN_BETA)
+    except Exception as e:
+        continue
 
+print(f"\n✅ 分析完成！共 {passed_count} 檔股票符合嚴格篩選條件。")
 
-            # 生成圖表 (含 SMC 特徵)
-            img_d, tp, sl = generate_chart_image(df_d, t, "Daily")
-            if not img_d: continue
-            img_h, _, _ = generate_chart_image(df_h if not df_h.empty else df_d, t, "Hourly")
-            
-            # 交易訊號與文案
-            s_low, s_high = sl, tp
-            range_len = s_high - s_low
-            pos_pct = (current_price - s_low) / range_len if range_len > 0 else 0.5
-            signal = "LONG" if pos_pct < 0.4 else "WAIT"
-            cls = "b-long" if signal == "LONG" else "b-wait"
-            
-            # AI 分析文案
-            if signal == "LONG":
-                rr = (tp - current_price) / (current_price - sl*0.98) if (current_price - sl*0.98) > 0 else 0
-                ai_text = (
-                    f"<b>🟢 AI Bullish Scan for {t}:</b><br>"
-                    f"1. <b>Displacement:</b> Look for energetic candles breaking structure.<br>"
-                    f"2. <b>Liquidity:</b> Price is sweeping SSL at ${sl:.2f}.<br>"
-                    f"3. <b>FVG:</b> Watch for entry inside Bullish Fair Value Gaps on H1.<br>"
-                    f"4. <b>Action:</b> Buy in Discount Zone. Target BSL at ${tp:.2f}."
-                )
-                setup_html = f"""
-                <div class="setup-grid">
-                    <div><span>ENTRY</span><br><b>${current_price:.2f}</b></div>
-                    <div><span>🛑 SL</span><br><b class="r">${sl:.2f}</b></div>
-                    <div><span>🎯 TP</span><br><b class="g">${tp:.2f}</b></div>
-                    <div><span>RR</span><br><b class="y">{rr:.1f}R</b></div>
-                </div>"""
-            else:
-                ai_text = (
-                    f"<b>⏳ AI Neutral Scan for {t}:</b><br>"
-                    f"Price is currently in the <b>Premium Zone</b> (>50%).<br>"
-                    f"Institutions typically sell here. Wait for price to drop into the Discount Zone (<${(s_low+range_len*0.4):.2f}) or look for Short setups at EQH."
-                )
-                setup_html = "<div class='setup-wait'>⏳ Wait for Discount</div>"
-
-
-            # 卡片 HTML
-            cards_in_sector += f"""
-            <div class="card" onclick="openModal('{t}', '{img_d}', '{img_h}', '{signal}', `{ai_text}`)">
-                <div class="head">
-                    <div><div class="code">{t}</div><div class="price">${current_price:.2f}</div></div>
-                    <span class="badge {cls}">{signal}</span>
-                </div>
-                {setup_html}
-                <div class="hint">Tap for SMC Charts ↗</div>
-            </div>
-            """
-            
-            if pass_filter:
-                passed_count += 1
-                screener_rows += f"<tr><td><b>{t}</b></td><td>${current_price:.2f}</td><td class='g'>Pass</td><td>{beta:.2f}</td><td><span class='badge {cls}'>{signal}</span></td></tr>"
-
-
-        except Exception as e: continue
-            
-    if cards_in_sector:
-        sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards_in_sector}</div>"
-
-
-print(f"\n✅ 分析完成！共 {passed_count} 檔股票符合嚴格篩選。正在生成網頁...")
-
-
-# --- 6. 生成網頁 ---
+# --- 5. 生成網頁 ---
 full_html = f"""
 <!DOCTYPE html>
 <html>
 <head>
 <style>
-    :root {{ --bg:#0f172a; --card:#1e293b; --text:#f8fafc; --acc:#3b82f6; --g:#10b981; --r:#ef4444; --y:#fbbf24; }}
-    body {{ background:var(--bg); color:var(--text); font-family:-apple-system, sans-serif; margin:0; padding:20px; }}
-    .tabs {{ display:flex; gap:10px; border-bottom:1px solid #334155; padding-bottom:15px; margin-bottom:20px; position:sticky; top:0; background:var(--bg); z-index:10; }}
-    .tab {{ padding:10px 20px; background:#334155; border-radius:8px; cursor:pointer; color:#94a3b8; font-weight:bold; }}
-    .tab.active {{ background:var(--acc); color:white; }}
-    .content {{ display:none; animation:fadeIn 0.5s; }} .content.active {{ display:block; }}
-    @keyframes fadeIn {{ from {{ opacity:0; }} to {{ opacity:1; }} }}
+    :root {{ --bg:#0f172a; --card:#1e293b; --text:#f8fafc; --acc:#3b82f6; --g:#10b981; --r:#ef4444; }}
+    body {{ background:var(--bg); color:var(--text); font-family:sans-serif; margin:0; padding:20px; }}
     
-    .sector-title {{ border-left:4px solid var(--acc); padding-left:10px; margin:30px 0 15px; color:#e2e8f0; }}
-    .grid {{ display:grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap:15px; }}
-    .card {{ background:var(--card); border:1px solid #334155; border-radius:12px; padding:15px; cursor:pointer; transition:0.2s; }}
+    /* Tabs */
+    .tabs {{ display:flex; gap:10px; border-bottom:1px solid #334155; padding-bottom:10px; margin-bottom:20px; }}
+    .tab {{ padding:10px 20px; background:#334155; border-radius:6px; cursor:pointer; color:#94a3b8; font-weight:bold; transition:0.2s; }}
+    .tab:hover {{ background:#475569; }}
+    .tab.active {{ background:var(--acc); color:white; }}
+    
+    .content {{ display:none; animation: fadeIn 0.4s; }}
+    .content.active {{ display:block; }}
+    @keyframes fadeIn {{ from {{ opacity:0; }} to {{ opacity:1; }} }}
+
+    /* SMC Grid */
+    .grid {{ display:grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap:12px; }}
+    .card {{ background:var(--card); border:1px solid #334155; border-radius:8px; padding:12px; cursor:pointer; transition:0.2s; }}
     .card:hover {{ border-color:var(--acc); transform:translateY(-3px); }}
-    .head {{ display:flex; justify-content:space-between; margin-bottom:10px; }}
-    .code {{ font-size:1.4rem; font-weight:900; }} .price {{ color:#94a3b8; font-family:monospace; }}
-    .badge {{ padding:4px 8px; border-radius:6px; font-size:0.8rem; font-weight:bold; height:fit-content; }}
+    
+    .head {{ display:flex; justify-content:space-between; align-items:center; margin-bottom:5px; }}
+    .price {{ font-size:1.1rem; font-weight:bold; color:#cbd5e1; }}
+    .badge {{ padding:2px 6px; border-radius:4px; font-size:0.7rem; font-weight:bold; }}
     .b-long {{ background:rgba(16,185,129,0.2); color:var(--g); border:1px solid var(--g); }}
     .b-wait {{ background:rgba(148,163,184,0.1); color:#94a3b8; border:1px solid #334155; }}
-    .setup-grid {{ display:grid; grid-template-columns:1fr 1fr; gap:8px; background:rgba(0,0,0,0.3); padding:10px; border-radius:8px; text-align:center; font-size:0.8rem; }}
-    .setup-wait {{ background:rgba(0,0,0,0.3); padding:15px; border-radius:8px; text-align:center; color:#64748b; font-size:0.9rem; }}
-    .g {{ color:var(--g); }} .r {{ color:var(--r); }} .y {{ color:var(--y); }}
-    .hint {{ font-size:0.75rem; color:var(--acc); text-align:right; margin-top:10px; opacity:0.8; }}
-    
-    table {{ width:100%; border-collapse:collapse; background:var(--card); border-radius:10px; overflow:hidden; }}
+    .plan {{ font-size:0.75rem; background:rgba(0,0,0,0.3); padding:4px; border-radius:4px; margin-top:5px; color:#94a3b8; }}
+    .g {{ color:var(--g); }} .y {{ color:#fbbf24; }}
+
+    /* Screener Table */
+    .table-container {{ overflow-x:auto; }}
+    table {{ width:100%; border-collapse:collapse; background:var(--card); border-radius:10px; overflow:hidden; min-width:600px; }}
     th, td {{ padding:12px; text-align:left; border-bottom:1px solid #334155; }}
-    th {{ background:#334155; color:#94a3b8; font-size:0.85rem; }}
+    th {{ background:#334155; font-size:0.8rem; color:#94a3b8; text-transform:uppercase; }}
+    tr:hover {{ background:rgba(255,255,255,0.05); }}
     
-    .modal {{ display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:999; justify-content:center; align-items:start; overflow-y:auto; padding:20px; }}
-    .m-content {{ background:var(--card); width:100%; max-width:800px; padding:20px; border-radius:12px; border:1px solid #475569; margin-top:20px; }}
-    .chart-box {{ margin-bottom:20px; }} .chart-title {{ color:var(--acc); font-weight:bold; display:block; margin-bottom:5px; }}
+    /* Modal */
+    .modal {{ display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.9); justify-content:center; align-items:center; z-index:999; backdrop-filter:blur(3px); }}
+    .m-content {{ background:var(--card); padding:20px; border-radius:12px; max-width:600px; width:95%; border:1px solid #475569; text-align:center; }}
     .m-content img {{ width:100%; border-radius:8px; border:1px solid #334155; }}
-    .ai-box {{ background:rgba(16,185,129,0.1); border-left:4px solid var(--g); padding:15px; border-radius:4px; margin-bottom:20px; line-height:1.6; color:#e2e8f0; font-size:0.9rem; }}
-    .close-btn {{ width:100%; padding:15px; background:var(--acc); color:white; border:none; border-radius:8px; font-weight:bold; cursor:pointer; font-size:1rem; }}
+    .close-btn {{ margin-top:15px; background:var(--acc); color:white; border:none; padding:10px 30px; border-radius:6px; cursor:pointer; font-weight:bold; }}
 </style>
 </head>
 <body>
 
-
 <div class="tabs">
-    <div class="tab active" onclick="setTab('overview', this)">📊 Sectors & SMC Analysis</div>
-    <div class="tab" onclick="setTab('screener', this)">🔍 Strict Screener ({passed_count})</div>
+    <div class="tab active" onclick="setTab('smc', this)">📊 Market Overview ({len(tickers)})</div>
+    <div class="tab" onclick="setTab('screen', this)">🔍 Strict Screener ({passed_count})</div>
 </div>
 
+<div id="smc" class="content active">
+    <div class="grid">{smc_cards_html}</div>
+</div>
 
-<div id="overview" class="content active">{sector_html_blocks}</div>
-
-
-<div id="screener" class="content">
-    <div style="background:rgba(59,130,246,0.1); padding:15px; border-radius:8px; margin-bottom:20px; border:1px solid var(--acc); color:#cbd5e1;">
-        <b>🎯 Filters:</b> Price > 200 SMA • Beta >= 1 • High Volume • High Cap
+<div id="screen" class="content">
+    <div style="margin-bottom:15px; padding:10px; background:rgba(59,130,246,0.15); border-left:4px solid var(--acc); color:#cbd5e1; font-size:0.9rem; border-radius:4px;">
+        <b>🎯 Screening Criteria:</b><br>
+        1. Price > 200 SMA (Uptrend)<br>
+        2. Market Cap > $2 Billion<br>
+        3. Monthly Vol > $900 Million<br>
+        4. Beta >= 1 (High Volatility)
     </div>
-    <table><thead><tr><th>Ticker</th><th>Price</th><th>Trend</th><th>Beta</th><th>Signal</th></tr></thead><tbody>{screener_rows}</tbody></table>
+    <div class="table-container">
+        <table>
+            <thead><tr><th>Ticker</th><th>Price</th><th>vs 200SMA</th><th>Beta</th><th>Mth Vol</th><th>Cap</th><th>Signal</th></tr></thead>
+            <tbody>
+                {screener_rows_html if screener_rows_html else "<tr><td colspan='7' style='text-align:center;padding:30px'>No stocks match the criteria.</td></tr>"}
+            </tbody>
+        </table>
+    </div>
 </div>
 
-
-<div id="modal" class="modal" onclick="document.getElementById('modal').style.display='none'">
+<div id="modal" class="modal" onclick="this.style.display='none'">
     <div class="m-content" onclick="event.stopPropagation()">
-        <h2 id="m-ticker" style="margin-top:0; color:white"></h2>
-        <div id="m-ai" class="ai-box"></div>
-        <div class="chart-box"><span class="chart-title">📅 Daily Structure (Premium vs Discount)</span><img id="img-d" src=""></div>
-        <div class="chart-box"><span class="chart-title">⏱️ Hourly Structure (Execution)</span><img id="img-h" src=""></div>
+        <h3 id="m-title" style="margin-top:0; color:white">Chart</h3>
+        <img id="m-img" src="">
+        <br>
         <button class="close-btn" onclick="document.getElementById('modal').style.display='none'">Close</button>
     </div>
 </div>
-
 
 <script>
 function setTab(id, el) {{
@@ -360,22 +277,15 @@ function setTab(id, el) {{
     document.getElementById(id).classList.add('active');
     el.classList.add('active');
 }}
-function openModal(ticker, d_src, h_src, signal, ai_text) {{
+function openModal(src, title) {{
     document.getElementById('modal').style.display = 'flex';
-    document.getElementById('m-ticker').innerText = ticker + " (" + signal + ")";
-    document.getElementById('m-ai').innerHTML = ai_text;
-    document.getElementById('img-d').src = d_src;
-    document.getElementById('img-h').src = h_src;
+    document.getElementById('m-img').src = src;
+    document.getElementById('m-title').innerText = title + " Structure";
 }}
 </script>
-
 
 </body>
 </html>
 """
 
-
 display(HTML(full_html))
-------------------------------------------------------------------------
-
-
