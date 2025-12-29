@@ -22,11 +22,11 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # (B) 安裝 Python 3.9
+      # (B) 安裝 Python 3.10
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.10'
 
       # (C) 安裝 requirements.txt 裡的套件
       - name: Install libraries
