@@ -1,49 +1,39 @@
 name: DailyDip Auto Update
 
-# 1. 設定觸發條件
 on:
   schedule:
-    # 這是定時器：每小時的第 0 分鐘執行一次 (UTC 時間)
-    - cron: '0 * * * *'
-  # 這是手動開關：讓你可以在 Actions 頁面按按鈕手動執行
-  workflow_dispatch:
+    - cron: '0 * * * *' # 每小時執行
+  workflow_dispatch: # 手動執行按鈕
 
-# 2. 設定權限 (重要！允許 Action 修改你的倉庫內容)
 permissions:
   contents: write
 
-# 3. 定義工作內容
 jobs:
   build-and-deploy:
-    runs-on: ubuntu-latest  # 使用最新的 Linux 雲端電腦
+    runs-on: ubuntu-latest
 
     steps:
-      # (A) 把你的程式碼下載到雲端電腦
       - name: Checkout code
         uses: actions/checkout@v3
 
-      # (B) 安裝 Python 3.10
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.10'
 
-      # (C) 安裝 requirements.txt 裡的套件
       - name: Install libraries
         run: |
           pip install -r requirements.txt
 
-      # (D) 執行你的 Python 程式 (這裡會生成 index.html)
-       - name: Run Analysis Script
+      - name: Run Analysis Script
         env:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
         run: |
           python main.py
 
-      # (E) 將生成的 index.html 發佈到 gh-pages 分支
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
         with:
           github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_dir: ./  # 發佈當前目錄下的檔案
-          publish_branch: gh-pages  # 發佈到這個分支
+          publish_dir: ./
+          publish_branch: gh-pages
