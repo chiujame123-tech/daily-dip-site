@@ -5,6 +5,7 @@ import pandas as pd
 import numpy as np
 import base64
 import json
+import time # 引入時間模組，用來休息
 from io import BytesIO
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
@@ -29,23 +30,41 @@ SECTORS = {
 }
 ALL_TICKERS = [t for sector in SECTORS.values() for t in sector]
 
-# --- 2. 數據獲取 ---
+# --- 2. 數據獲取 (含除錯訊息) ---
 def get_polygon_data(ticker, multiplier=1, timespan='day', limit=100):
-    if not API_KEY: return None
+    if not API_KEY: 
+        return None
+    
     try:
+        # 增加延遲，避免觸發 Rate Limit
+        time.sleep(0.2) 
+        
         end_date = datetime.now().strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=200)).strftime('%Y-%m-%d')
+        
         url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{start_date}/{end_date}?adjusted=true&sort=asc&limit=500&apiKey={API_KEY}"
+        
         resp = requests.get(url, timeout=10)
+        
+        # --- 除錯核心：檢查回應狀態 ---
+        if resp.status_code != 200:
+            log_error(f"Polygon API Error ({ticker}): {resp.status_code} - {resp.text}")
+            return None
+            
         data = resp.json()
-        if data.get('status') != 'OK' or not data.get('results'): return None
+        
+        if data.get('status') != 'OK' or not data.get('results'): 
+            # 這裡不報錯，因為有時候可能是沒交易數據，單純回傳 None
+            return None
+            
         df = pd.DataFrame(data['results'])
         df['Date'] = pd.to_datetime(df['t'], unit='ms')
         df.set_index('Date', inplace=True)
         df = df.rename(columns={'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'})
         return df[['Open', 'High', 'Low', 'Close', 'Volume']]
+        
     except Exception as e:
-        log_error(f"Data Error {ticker}: {e}")
+        log_error(f"Data Exception {ticker}: {e}")
         return None
 
 def get_weekly_hot_news():
@@ -91,7 +110,6 @@ def generate_chart_image(df, ticker, timeframe, entry, sl, tp):
         
         swing_high = plot_df['High'].max()
         swing_low = plot_df['Low'].min()
-        eq = (swing_high + swing_low) / 2
         
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
         s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#334155', facecolor='#0f172a')
@@ -115,9 +133,8 @@ def generate_chart_image(df, ticker, timeframe, entry, sl, tp):
 
 # --- 4. 主程式 ---
 def main():
-    print("🚀 Starting Analysis...")
+    print("🚀 Starting Analysis (Debug Mode)...")
     
-    # 防呆機制：如果沒有 Key，顯示錯誤頁面
     if not API_KEY:
         log_error("Missing POLYGON_API_KEY in GitHub Secrets")
     
@@ -134,7 +151,11 @@ def main():
             for t in tickers:
                 try:
                     df_d = get_polygon_data(t, 1, 'day')
-                    if df_d is None or len(df_d) < 50: continue
+                    
+                    # 這裡是關鍵：如果抓不到日線，就代表這支股票出錯了
+                    if df_d is None or len(df_d) < 50: 
+                        print(f"⚠️ No Data for {t}")
+                        continue
                     
                     df_h = get_polygon_data(t, 1, 'hour')
                     if df_h is None: df_h = df_d
@@ -161,7 +182,6 @@ def main():
                     reward = tp - entry
                     rr = reward / risk if risk > 0 else 0
                     
-                    # AI Text
                     if signal == "LONG":
                         ai_html = f"<div class='deploy-box long'><div class='deploy-title'>✅ LONG SETUP</div><ul class='deploy-list'><li><b>Entry:</b> ${entry:.2f}</li><li><b>SL:</b> ${sl:.2f}</li><li><b>TP:</b> ${tp:.2f}</li><li><b>RR:</b> {rr:.1f}R</li></ul></div>"
                     else:
@@ -185,11 +205,14 @@ def main():
             
             if cards_in_sector:
                 sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards_in_sector}</div>"
+    
+    # 如果完全沒有數據，強制顯示一條訊息
+    if not sector_html_blocks:
+        sector_html_blocks = "<div style='padding:20px; text-align:center'>No Data Available. Please check System Warnings above.</div>"
 
     json_data = json.dumps(APP_DATA)
     error_display = "<br>".join(ERROR_LOG) if ERROR_LOG else ""
 
-    # 生成 HTML (無論是否有錯誤，都會生成這個檔案，避免 404)
     final_html = f"""
     <!DOCTYPE html>
     <html lang="zh-Hant">
@@ -225,7 +248,7 @@ def main():
         .deploy-box.long {{ background:rgba(16,185,129,0.1); border-color:var(--g); }}
         .deploy-box.wait {{ background:rgba(251,191,36,0.1); border-color:var(--y); }}
         .close-btn {{ width:100%; padding:12px; background:var(--acc); border:none; color:white; border-radius:6px; font-weight:bold; margin-top:10px; }}
-        .error-log {{ background:rgba(239,68,68,0.1); border:1px solid #ef4444; color:#ef4444; padding:10px; margin-bottom:20px; border-radius:6px; font-size:0.8rem; }}
+        .error-log {{ background:rgba(239,68,68,0.1); border:1px solid #ef4444; color:#ef4444; padding:10px; margin-bottom:20px; border-radius:6px; font-size:0.8rem; white-space: pre-wrap; }}
     </style>
     </head>
     <body>
@@ -235,7 +258,7 @@ def main():
             <div class="tab" onclick="setTab('news', this)">📰 News</div>
         </div>
         
-        {f'<div class="error-log"><b>System Warnings:</b><br>{error_display}</div>' if error_display else ''}
+        {f'<div class="error-log"><b>System Warnings / Debug Log:</b><br>{error_display}</div>' if error_display else ''}
 
         <div id="overview" class="content active">{sector_html_blocks}</div>
         <div id="screener" class="content"><table><thead><tr><th>Ticker</th><th>Price</th><th>Trend</th><th>Signal</th></tr></thead><tbody>{screener_rows}</tbody></table></div>
@@ -275,7 +298,6 @@ def main():
     </html>
     """
     
-    # 無論如何都會寫入檔案，確保不會 404
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(final_html)
     print("✅ index.html generated successfully!")
