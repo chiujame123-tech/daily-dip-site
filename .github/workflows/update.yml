@@ -34,7 +34,9 @@ jobs:
           pip install -r requirements.txt
 
       # (D) 執行你的 Python 程式 (這裡會生成 index.html)
-      - name: Run Analysis Script
+       - name: Run Analysis Script
+        env:
+          POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
         run: |
           python main.py
 
