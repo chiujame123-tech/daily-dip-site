@@ -1,117 +1,137 @@
-import yfinance as yf
+import os
+import requests
 import mplfinance as mpf
 import pandas as pd
 import numpy as np
 import base64
 import json
-import requests
-import xml.etree.ElementTree as ET
 from io import BytesIO
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from datetime import datetime
+from datetime import datetime, timedelta
 
-# --- 1. 設定觀察清單 (您可以隨意增加) ---
+# --- 0. 讀取 API KEY ---
+API_KEY = os.environ.get("POLYGON_API_KEY")
+
+if not API_KEY:
+    print("❌ 錯誤：找不到 POLYGON_API_KEY。請確認 GitHub Secrets 已設定。")
+    # 本地測試時可暫時取消下方註解填入 Key，上傳時請務必刪除
+    # API_KEY = "你的KEY"
+
+# --- 1. 設定觀察清單 ---
 SECTORS = {
     "💎 科技巨頭": ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META"],
     "⚡ 半導體": ["TSM", "AMD", "AVGO", "MU", "INTC", "ARM", "QCOM"],
-    "☁️ 軟體與SaaS": ["PLTR", "CRM", "ADBE", "SNOW", "PANW", "COIN", "MSTR"],
-    "🏦 金融與消費": ["JPM", "V", "MA", "COST", "MCD", "NKE", "KO"],
+    "☁️ 軟體與SaaS": ["PLTR", "COIN", "MSTR", "CRM", "SNOW", "PANW"],
+    "🏦 金融": ["JPM", "V", "COST", "MCD", "NKE"],
 }
 ALL_TICKERS = [t for sector in SECTORS.values() for t in sector]
 
-# --- 2. 抓取中文新聞 (Google News RSS) ---
-def get_chinese_news():
+# --- 2. Polygon 數據獲取 ---
+def get_polygon_data(ticker, multiplier=1, timespan='day', limit=100):
+    try:
+        end_date = datetime.now().strftime('%Y-%m-%d')
+        start_date = (datetime.now() - timedelta(days=200)).strftime('%Y-%m-%d') # 抓多一點確保 MA 計算
+        
+        url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{start_date}/{end_date}?adjusted=true&sort=asc&limit=500&apiKey={API_KEY}"
+        
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        
+        if data.get('status') != 'OK' or not data.get('results'):
+            return None
+            
+        df = pd.DataFrame(data['results'])
+        df['Date'] = pd.to_datetime(df['t'], unit='ms')
+        df.set_index('Date', inplace=True)
+        df = df.rename(columns={'o': 'Open', 'h': 'High', 'l': 'Low', 'c': 'Close', 'v': 'Volume'})
+        return df[['Open', 'High', 'Low', 'Close', 'Volume']]
+    except Exception as e:
+        print(f"Data Error {ticker}: {e}")
+        return None
+
+def get_weekly_hot_news():
+    """獲取過去 7 天的熱門股票新聞"""
     news_html = ""
     try:
-        # Google News RSS 針對 "美股" + 熱門關鍵字
-        url = "https://news.google.com/rss/search?q=美股+NVDA+TSLA+AAPL+AMD+台積電&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
-        response = requests.get(url, timeout=10)
+        # 設定日期範圍：過去 7 天
+        today = datetime.now().strftime('%Y-%m-%d')
+        last_week = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
         
-        if response.status_code == 200:
-            root = ET.fromstring(response.content)
-            count = 0
-            
-            # 解析 XML
-            for item in root.findall('./channel/item'):
-                if count >= 12: break # 取前 12 篇
+        # 針對大盤 (SPY, QQQ) 和熱門股 (NVDA, TSLA) 抓新聞
+        tickers = "SPY,QQQ,NVDA,TSLA,AAPL"
+        url = f"https://api.polygon.io/v2/reference/news?ticker={tickers}&published_utc.gte={last_week}&limit=15&sort=published_utc&order=desc&apiKey={API_KEY}"
+        
+        resp = requests.get(url, timeout=10)
+        data = resp.json()
+        
+        if data.get('results'):
+            for item in data['results']:
+                title = item.get('title')
+                article_url = item.get('article_url')
+                publisher = item.get('publisher', {}).get('name', 'Unknown')
+                published_utc = item.get('published_utc', '')
+                description = item.get('description', '')
                 
-                title = item.find('title').text
-                link = item.find('link').text
-                pub_date = item.find('pubDate').text
-                source = item.find('source').text if item.find('source') is not None else "新聞快訊"
-                
-                # 簡單格式化時間
                 try:
-                    dt = datetime.strptime(pub_date, '%a, %d %b %Y %H:%M:%S %Z')
-                    date_str = dt.strftime('%m/%d %H:%M')
+                    dt = datetime.strptime(published_utc, "%Y-%m-%dT%H:%M:%SZ")
+                    date_str = dt.strftime('%Y/%m/%d')
                 except:
                     date_str = ""
+                
+                # 簡單過濾掉太短或無意義的新聞
+                if len(description) < 20: continue
 
                 news_html += f"""
                 <div class="news-item">
-                    <div class="news-meta">{source} • {date_str}</div>
-                    <a href="{link}" target="_blank" class="news-title">{title}</a>
+                    <div class="news-meta"><span style="color:#fbbf24">{date_str}</span> • {publisher}</div>
+                    <a href="{article_url}" target="_blank" class="news-title">{title}</a>
+                    <div style="font-size:0.8rem; color:#94a3b8; margin-top:5px;">{description[:100]}...</div>
                 </div>
                 """
-                count += 1
+        else:
+            news_html = "<div style='padding:20px'>本週暫無重大熱門新聞。</div>"
+            
     except Exception as e:
-        print(f"News Error: {e}")
-        news_html = f"<div style='padding:20px'>暫時無法載入新聞 ({e})</div>"
+        news_html = f"<div style='padding:20px'>新聞載入錯誤: {e}</div>"
         
     return news_html
 
-# --- 3. AI 中文分析邏輯 ---
-def generate_ai_analysis(ticker, price, sma200, swing_high, swing_low):
-    # 趨勢判斷
-    trend = "多頭上升趨勢 (股價在 200MA 之上)" if price > sma200 else "空頭修正趨勢 (股價在 200MA 之下)"
-    trend_color = "#10b981" if price > sma200 else "#ef4444"
+# --- 3. SMC 戰術分析邏輯 (核心) ---
+def calculate_smc_levels(df):
+    """計算 SMC 關鍵點位：Entry, SL, TP"""
+    # 尋找最近 50 根 K 線的高低點 (Swing High/Low)
+    window = 50
+    recent_df = df.tail(window)
     
-    # 價格位置判斷
-    range_len = swing_high - swing_low
-    if range_len == 0: pos = 0.5
-    else: pos = (price - swing_low) / range_len
+    bsl = recent_df['High'].max() # Buy Side Liquidity (TP)
+    ssl = recent_df['Low'].min()  # Sell Side Liquidity (SL)
+    eq = (bsl + ssl) / 2          # Equilibrium
     
-    zone = ""
-    action = ""
-    risk = ""
+    current_price = recent_df['Close'].iloc[-1]
     
-    if pos > 0.6:
-        zone = "🔴 溢價區 (Premium Zone)"
-        action = "目前價格偏貴，不建議追高。"
-        risk = "回調風險較大，建議等待拉回至平衡點 (50%) 再觀察。"
-    elif pos < 0.4:
-        zone = "🟢 折價區 (Discount Zone)"
-        action = "進入機構偏好的買入區間。"
-        risk = "若趨勢向上，這裡是盈虧比 (RR) 極佳的入場點。"
-    else:
-        zone = "🔵 平衡區 (Equilibrium)"
-        action = "價格位於中間地帶，方向不明。"
-        risk = "建議觀望，等待價格進入折價區再行動。"
+    # 尋找最近的 Bullish FVG (看漲缺口) 作為最佳入場點
+    best_entry = eq # 預設入場點為平衡點
+    
+    # 從最新往回找 FVG
+    for i in range(len(recent_df)-1, 2, -1):
+        # 條件: Low[i] > High[i-2] (中間有缺口) 且 缺口在折價區 ( < EQ )
+        candle_low = recent_df['Low'].iloc[i]
+        prev_high = recent_df['High'].iloc[i-2]
+        
+        if candle_low > prev_high:
+            fvg_top = candle_low
+            # 如果這個 FVG 在折價區，這就是最佳入場點
+            if fvg_top < eq:
+                best_entry = fvg_top
+                break # 找到最近的一個就停止
+    
+    # SL 設定在 SSL 下方 1% 作為緩衝
+    stop_loss = ssl * 0.99 
+    
+    return bsl, ssl, eq, best_entry, stop_loss
 
-    # 組合中文分析報告
-    analysis = f"""
-    <div class="ai-report">
-        <div style="margin-bottom:8px; border-bottom:1px solid #333; padding-bottom:5px;">
-            <b style="color:#fbbf24;">🤖 AI 智能分析報告 ({ticker})</b>
-        </div>
-        <ul style="padding-left:15px; margin:0;">
-            <li style="margin-bottom:5px;"><b>趨勢狀態：</b> <span style="color:{trend_color}">{trend}</span></li>
-            <li style="margin-bottom:5px;"><b>目前位置：</b> <b>{zone}</b></li>
-            <li style="margin-bottom:5px;"><b>關鍵壓力：</b> 前波高點 <b>${swing_high:.2f}</b></li>
-            <li style="margin-bottom:5px;"><b>關鍵支撐：</b> 前波低點 <b>${swing_low:.2f}</b></li>
-            <li style="margin-top:10px; line-height:1.5;">
-                <b>💡 部署建議：</b><br>
-                {action}<br>
-                <span style="font-size:0.85em; color:#94a3b8;">({risk})</span>
-            </li>
-        </ul>
-    </div>
-    """
-    return analysis
-
-# --- 4. 繪圖核心函式 (加入指標註解) ---
-def identify_smc_features(df):
+def identify_fvgs(df):
     features = {"FVG": []}
     for i in range(2, len(df)):
         if df['Low'].iloc[i] > df['High'].iloc[i-2]:
@@ -120,44 +140,50 @@ def identify_smc_features(df):
             features['FVG'].append({'type': 'Bearish', 'top': df['Low'].iloc[i-2], 'bottom': df['High'].iloc[i], 'index': df.index[i-1]})
     return features
 
-def generate_chart_image(df, ticker, timeframe):
+def generate_chart_image(df, ticker, timeframe, entry, sl, tp):
     try:
-        plot_df = df.tail(50)
-        if len(plot_df) < 20: return None
+        plot_df = df.tail(60)
+        if len(plot_df) < 30: return None
         
         swing_high = plot_df['High'].max()
         swing_low = plot_df['Low'].min()
         eq = (swing_high + swing_low) / 2
-        smc = identify_smc_features(plot_df)
+        smc_features = identify_fvgs(plot_df)
         
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
         s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#334155', facecolor='#0f172a')
         
+        # 設定 SMC 戰術線 (Entry, SL, TP)
+        hlines = dict(
+            hlines=[tp, entry, sl],
+            colors=['#10b981', '#3b82f6', '#ef4444'], # 綠(TP), 藍(Entry), 紅(SL)
+            linewidths=[1.5, 1.5, 1.5],
+            linestyle=['-', '--', '-']
+        )
+
         fig, axlist = mpf.plot(plot_df, type='candle', style=s, volume=False,
             title=dict(title=f"{ticker} - {timeframe}", color='white', size=10),
-            figsize=(5, 3), returnfig=True)
+            hlines=hlines, figsize=(5, 3), returnfig=True)
         
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # --- 1. 加入區域與文字註解 (Chart Annotations) ---
-        
-        # Premium (賣出區)
-        rect_prem = patches.Rectangle((x_min, eq), x_max-x_min, swing_high-eq, linewidth=0, facecolor='#ef4444', alpha=0.1)
-        ax.add_patch(rect_prem)
-        ax.text(x_min, swing_high, " Premium (Sell)", color='#fca5a5', fontsize=6, va='top', fontweight='bold')
-        
-        # Discount (買入區)
-        rect_disc = patches.Rectangle((x_min, swing_low), x_max-x_min, eq-swing_low, linewidth=0, facecolor='#10b981', alpha=0.1)
-        ax.add_patch(rect_disc)
-        ax.text(x_min, swing_low, " Discount (Buy)", color='#86efac', fontsize=6, va='bottom', fontweight='bold')
-        
-        # Equilibrium (平衡線)
-        ax.axhline(eq, color='#3b82f6', linestyle='--', linewidth=0.8, alpha=0.7)
-        ax.text(x_max, eq, " EQ (50%)", color='#3b82f6', fontsize=6, ha='right', va='center')
+        # --- 文字標註 ---
+        # TP
+        ax.text(x_min, tp, f" TP (BSL): ${tp:.2f}", color='#10b981', fontsize=7, fontweight='bold', va='bottom')
+        # Entry
+        ax.text(x_min, entry, f" ENTRY: ${entry:.2f}", color='#3b82f6', fontsize=7, fontweight='bold', va='bottom')
+        # SL
+        ax.text(x_min, sl, f" SL (SSL): ${sl:.2f}", color='#ef4444', fontsize=7, fontweight='bold', va='top')
 
-        # FVG (缺口)
-        for fvg in smc['FVG']:
+        # 區域底色
+        rect_prem = patches.Rectangle((x_min, eq), x_max-x_min, swing_high-eq, linewidth=0, facecolor='#ef4444', alpha=0.05)
+        ax.add_patch(rect_prem)
+        rect_disc = patches.Rectangle((x_min, swing_low), x_max-x_min, eq-swing_low, linewidth=0, facecolor='#10b981', alpha=0.05)
+        ax.add_patch(rect_disc)
+
+        # FVG 區塊
+        for fvg in smc_features['FVG']:
             try:
                 idx = plot_df.index.get_loc(fvg['index'])
                 color = '#10b981' if fvg['type'] == 'Bullish' else '#ef4444'
@@ -166,94 +192,106 @@ def generate_chart_image(df, ticker, timeframe):
             except: pass
 
         buf = BytesIO()
-        fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=60)
+        fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=70)
         plt.close(fig)
-        buf.seek(0)
-        img_base64 = base64.b64encode(buf.read()).decode('utf-8')
-        return f"data:image/png;base64,{img_base64}", swing_high, swing_low
-    except:
+        return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+    except Exception as e:
+        print(f"Plot Error {ticker}: {e}")
         return None
 
-# --- 5. 主程式 ---
-def main():
-    print("🚀 正在啟動分析程序 (中文版)...")
+def generate_ai_analysis_text(ticker, price, sma200, bsl, ssl, entry, sl, tp):
+    # 趨勢分析
+    trend = "多頭 (Bullish)" if price > sma200 else "空頭 (Bearish)"
+    trend_color = "#10b981" if price > sma200 else "#ef4444"
     
-    # 下載股價
-    print("📊 下載股價數據中...")
-    data_daily = yf.download(ALL_TICKERS + ["SPY"], period="1y", interval="1d", group_by='ticker', progress=False)
-    data_hourly = yf.download(ALL_TICKERS, period="1mo", interval="1h", group_by='ticker', progress=False)
+    # 盈虧比計算 (RR)
+    risk = entry - sl
+    reward = tp - entry
+    rr = reward / risk if risk > 0 else 0
     
-    # 抓取中文新聞
-    print("📰 正在搜尋熱門美股新聞...")
-    market_news_block = get_chinese_news()
-
-    if isinstance(data_daily.columns, pd.MultiIndex):
-        spy_close = data_daily['SPY']['Close']
+    # 建議邏輯
+    if price < entry * 1.02 and price > sl:
+        action = "✅ **現價接近入場點，可考慮部署**"
+        reason = "股價位於折價區且接近 FVG/支撐位。"
+    elif price > entry * 1.05:
+        action = "⏳ **價格已跑，建議等待回調**"
+        reason = "目前價格偏離最佳入場點，追高風險大。"
     else:
-        spy_close = data_daily['Close']
-    spy_ret = spy_close.pct_change()
+        action = "👀 **觀察中**"
+        reason = "價格結構尚未明確。"
+
+    analysis = f"""
+    <div class="ai-report">
+        <div style="border-bottom:1px solid #333; padding-bottom:5px; margin-bottom:8px;">
+            <b style="color:#fbbf24;">🤖 SMC 戰術面板 ({ticker})</b>
+        </div>
+        <ul style="padding-left:15px; margin:0; line-height:1.6;">
+            <li><b>趨勢判定：</b> <span style="color:{trend_color}">{trend}</span> (vs 200MA)</li>
+            <li><b>流動性目標 (TP)：</b> <span style="color:#10b981">${tp:.2f}</span> (BSL)</li>
+            <li><b>最佳入場 (Entry)：</b> <span style="color:#3b82f6">${entry:.2f}</span> (FVG/EQ)</li>
+            <li><b>防守位置 (SL)：</b> <span style="color:#ef4444">${sl:.2f}</span> (SSL)</li>
+            <li><b>潛在盈虧比 (RR)：</b> {rr:.2f}R</li>
+        </ul>
+        <div style="margin-top:10px; padding:8px; background:rgba(255,255,255,0.05); border-radius:4px;">
+            {action}<br>
+            <span style="font-size:0.85em; color:#94a3b8;">理由: {reason}</span>
+        </div>
+    </div>
+    """
+    return analysis
+
+# --- 4. 主程式 ---
+def main():
+    print("🚀 Starting SMC Analysis with Polygon...")
+    
+    if not API_KEY: return
+
+    # 1. 抓取每週熱門新聞
+    print("📰 Fetching Weekly Hot News...")
+    weekly_news_html = get_weekly_hot_news()
 
     sector_html_blocks = ""
     screener_rows = ""
-    passed_count = 0
-    
     APP_DATA = {}
+    passed_count = 0
 
     for sector, tickers in SECTORS.items():
         cards_in_sector = ""
         for t in tickers:
             try:
-                # 數據處理
-                if isinstance(data_daily.columns, pd.MultiIndex):
-                    try:
-                        df_d = data_daily[t].dropna()
-                        df_h = data_hourly[t].dropna()
-                    except: continue
-                else: continue
+                # 2. 抓取數據
+                df_d = get_polygon_data(t, 1, 'day')
+                if df_d is None or len(df_d) < 60: continue
+                
+                df_h = get_polygon_data(t, 1, 'hour')
+                if df_h is None: df_h = df_d
 
-                if len(df_d) < 50: continue
                 curr_price = df_d['Close'].iloc[-1]
-                if isinstance(curr_price, pd.Series): curr_price = curr_price.iloc[0]
-
-                # 指標計算
                 sma200 = df_d['Close'].rolling(200).mean().iloc[-1]
-                if isinstance(sma200, pd.Series): sma200 = sma200.iloc[0]
-                
-                vol = (df_d['Close'] * df_d['Volume']).rolling(21).mean().iloc[-1] * 21
-                if isinstance(vol, pd.Series): vol = vol.iloc[0]
-                
-                stock_ret = df_d['Close'].pct_change()
-                combo = pd.DataFrame({'S': stock_ret, 'M': spy_ret}).dropna()
-                beta = 0
-                if len(combo) > 30:
-                    beta = combo['S'].rolling(252).cov(combo['M']).iloc[-1] / combo['M'].rolling(252).var().iloc[-1] if len(combo)>30 else 0
+                if pd.isna(sma200): sma200 = curr_price
 
-                pass_filter = (curr_price > sma200 and vol > 900000000 and beta >= 1.0)
+                # 3. 計算 SMC 關鍵位 (BSL, SSL, Entry, SL, TP)
+                bsl, ssl, eq, entry, sl = calculate_smc_levels(df_d)
+                tp = bsl # TP 設為上方流動性
 
-                # 生成圖表
-                res_d = generate_chart_image(df_d, t, "Daily (D1)")
-                if not res_d: continue
-                img_d_src, tp, sl = res_d
-                
-                res_h = generate_chart_image(df_h if not df_h.empty else df_d, t, "Hourly (H1)")
-                img_h_src = res_h[0] if res_h else ""
+                # 4. 生成圖表 (帶有 Entry/SL/TP 線)
+                img_d = generate_chart_image(df_d, t, "Daily Structure", entry, sl, tp)
+                img_h = generate_chart_image(df_h, t, "Hourly Entry", entry, sl, tp)
 
-                # 訊號判斷
-                range_len = tp - sl
-                pos_pct = (curr_price - sl) / range_len if range_len > 0 else 0.5
-                signal = "LONG" if pos_pct < 0.45 else "WAIT"
+                # 5. 生成 AI 分析文案
+                ai_html = generate_ai_analysis_text(t, curr_price, sma200, bsl, ssl, entry, sl, tp)
+
+                # 訊號
+                is_bullish = curr_price > sma200
+                signal = "LONG" if is_bullish and curr_price < eq else "WAIT"
                 cls = "b-long" if signal == "LONG" else "b-wait"
 
-                # 生成中文分析文案
-                ai_text = generate_ai_analysis(t, curr_price, sma200, tp, sl)
-
-                # 存入數據
+                # 存儲數據
                 APP_DATA[t] = {
                     "signal": signal,
-                    "price": f"${curr_price:.2f}",
-                    "deploy": ai_text,
-                    "img_d": img_d_src,
-                    "img_h": img_h_src
+                    "deploy": ai_html,
+                    "img_d": img_d,
+                    "img_h": img_h
                 }
 
                 cards_in_sector += f"""
@@ -262,13 +300,14 @@ def main():
                         <div><div class="code">{t}</div><div class="price">${curr_price:.2f}</div></div>
                         <span class="badge {cls}">{signal}</span>
                     </div>
-                    <div class="hint">點擊查看分析 ↗</div>
+                    <div class="hint">查看 SMC 部署 ↗</div>
                 </div>
                 """
                 
-                if pass_filter:
+                # 篩選器條件 (價格在 200MA 上 且 回調到平衡點以下)
+                if is_bullish:
                     passed_count += 1
-                    screener_rows += f"<tr><td>{t}</td><td>${curr_price:.2f}</td><td class='g'>通過</td><td>{beta:.2f}</td><td><span class='badge {cls}'>{signal}</span></td></tr>"
+                    screener_rows += f"<tr><td>{t}</td><td>${curr_price:.2f}</td><td class='g'>多頭</td><td><span class='badge {cls}'>{signal}</span></td></tr>"
 
             except Exception as e:
                 print(f"Skipping {t}: {e}")
@@ -285,93 +324,75 @@ def main():
     <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>美股 AI 智能分析</title>
+    <title>DailyDip Pro (SMC Edition)</title>
     <style>
         :root {{ --bg:#0f172a; --card:#1e293b; --text:#f8fafc; --acc:#3b82f6; --g:#10b981; --r:#ef4444; --y:#fbbf24; }}
-        body {{ background:var(--bg); color:var(--text); font-family:-apple-system, BlinkMacSystemFont, "Microsoft JhengHei", sans-serif; margin:0; padding:10px; }}
-        
-        /* 頁籤樣式 */
+        body {{ background:var(--bg); color:var(--text); font-family:sans-serif; margin:0; padding:10px; }}
         .tabs {{ display:flex; gap:10px; padding-bottom:10px; margin-bottom:15px; border-bottom:1px solid #333; overflow-x:auto; }}
-        .tab {{ padding:8px 16px; background:#334155; border-radius:6px; cursor:pointer; font-weight:bold; font-size:0.9rem; white-space:nowrap; transition:0.2s; }}
+        .tab {{ padding:8px 16px; background:#334155; border-radius:6px; cursor:pointer; font-weight:bold; font-size:0.9rem; white-space:nowrap; }}
         .tab.active {{ background:var(--acc); color:white; }}
-        
-        .content {{ display:none; animation:fadeIn 0.3s; }} .content.active {{ display:block; }}
-        @keyframes fadeIn {{ from {{ opacity:0; }} to {{ opacity:1; }} }}
-
-        .sector-title {{ border-left:4px solid var(--acc); padding-left:10px; margin:25px 0 10px; font-size:1.1rem; color:#e2e8f0; }}
+        .content {{ display:none; }} .content.active {{ display:block; }}
+        .sector-title {{ border-left:4px solid var(--acc); padding-left:10px; margin:20px 0 10px; font-size:1.1rem; }}
         .grid {{ display:grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap:10px; }}
-        
-        .card {{ background:var(--card); border:1px solid #333; border-radius:10px; padding:12px; cursor:pointer; transition:0.2s; }}
-        .card:hover {{ border-color:var(--acc); transform:translateY(-3px); }}
-        
+        .card {{ background:var(--card); border:1px solid #333; border-radius:8px; padding:10px; cursor:pointer; transition:0.2s; }}
+        .card:hover {{ border-color:var(--acc); transform:translateY(-2px); }}
         .head {{ display:flex; justify-content:space-between; margin-bottom:5px; }}
-        .code {{ font-weight:900; font-size:1.1rem; }} .price {{ color:#94a3b8; font-family:monospace; }}
-        .badge {{ padding:3px 6px; border-radius:4px; font-size:0.7rem; font-weight:bold; }}
+        .code {{ font-weight:900; font-size:1rem; }} .price {{ color:#94a3b8; font-family:monospace; }}
+        .badge {{ padding:2px 6px; border-radius:4px; font-size:0.7rem; font-weight:bold; }}
         .b-long {{ background:rgba(16,185,129,0.2); color:var(--g); border:1px solid var(--g); }}
         .b-wait {{ background:rgba(148,163,184,0.1); color:#94a3b8; border:1px solid #555; }}
         .hint {{ font-size:0.7rem; color:var(--acc); text-align:right; margin-top:5px; opacity:0.8; }}
         
-        table {{ width:100%; border-collapse:collapse; font-size:0.85rem; }}
-        th, td {{ padding:10px; text-align:left; border-bottom:1px solid #333; }}
-        th {{ color:#94a3b8; }}
-        .g {{ color:var(--g); }}
-        
-        /* 新聞樣式 */
-        .news-item {{ background:var(--card); border:1px solid #333; border-radius:10px; padding:15px; margin-bottom:12px; transition:0.2s; }}
-        .news-item:hover {{ border-color:#64748b; }}
-        .news-meta {{ font-size:0.75rem; color:#94a3b8; margin-bottom:6px; }}
-        .news-title {{ color:var(--text); text-decoration:none; font-weight:bold; font-size:1rem; line-height:1.4; display:block; }}
+        /* News Style */
+        .news-item {{ background:var(--card); border:1px solid #333; border-radius:8px; padding:15px; margin-bottom:10px; }}
+        .news-meta {{ font-size:0.75rem; color:#94a3b8; margin-bottom:5px; }}
+        .news-title {{ color:var(--text); text-decoration:none; font-weight:bold; font-size:1rem; display:block; margin-bottom:5px; }}
         .news-title:hover {{ color:var(--acc); }}
-
-        /* 彈窗樣式 */
+        
+        /* Modal & AI Box */
         .modal {{ display:none; position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); z-index:99; justify-content:center; align-items:start; overflow-y:auto; padding:10px; }}
-        .m-content {{ background:var(--card); width:100%; max-width:600px; padding:20px; border-radius:12px; margin-top:20px; border:1px solid #555; position:relative; }}
+        .m-content {{ background:var(--card); width:100%; max-width:600px; padding:15px; border-radius:12px; margin-top:20px; border:1px solid #555; }}
         .m-content img {{ width:100%; border-radius:6px; margin-bottom:10px; border:1px solid #333; }}
+        .ai-box {{ background:rgba(59,130,246,0.1); border-left:4px solid var(--acc); padding:15px; border-radius:4px; margin-bottom:15px; font-size:0.9rem; }}
+        .close-btn {{ width:100%; padding:12px; background:var(--acc); border:none; color:white; border-radius:6px; cursor:pointer; font-weight:bold; font-size:1rem; }}
         
-        .ai-box {{ background:rgba(59,130,246,0.1); border-left:4px solid var(--acc); padding:15px; border-radius:4px; margin-bottom:20px; line-height:1.6; font-size:0.95rem; color:#e2e8f0; }}
-        
-        .close-btn {{ width:100%; padding:12px; background:var(--acc); border:none; color:white; border-radius:8px; cursor:pointer; font-weight:bold; font-size:1rem; margin-top:10px; }}
-        .time {{ text-align:center; color:#666; font-size:0.7rem; margin-top:30px; margin-bottom:20px; }}
-        .chart-lbl {{ color:var(--acc); font-weight:bold; display:block; margin-bottom:5px; font-size:0.9rem; margin-top:10px; }}
+        table {{ width:100%; border-collapse:collapse; font-size:0.85rem; }}
+        th, td {{ padding:8px; text-align:left; border-bottom:1px solid #333; }}
+        .g {{ color:var(--g); }}
+        .time {{ text-align:center; color:#666; font-size:0.7rem; margin-top:30px; }}
     </style>
     </head>
     <body>
         <div class="tabs">
             <div class="tab active" onclick="setTab('overview', this)">📊 市場概況</div>
-            <div class="tab" onclick="setTab('screener', this)">🔍 強勢篩選</div>
-            <div class="tab" onclick="setTab('news', this)">📰 熱門新聞</div>
+            <div class="tab" onclick="setTab('screener', this)">🔍 多頭篩選</div>
+            <div class="tab" onclick="setTab('news', this)">📰 本週熱點</div>
         </div>
         
         <div id="overview" class="content active">{sector_html_blocks}</div>
         
         <div id="screener" class="content">
-            <div style="margin-bottom:15px; padding:10px; background:rgba(16,185,129,0.1); border-radius:6px; font-size:0.9rem;">
-                🎯 <b>篩選條件：</b> 股價 > 200MA • 交易量大 • 高波動 (Beta > 1)
+            <div style="padding:10px; background:rgba(16,185,129,0.1); margin-bottom:15px; border-radius:6px; font-size:0.9rem;">
+                🎯 <b>篩選邏輯：</b> 股價 > 200MA (多頭) + 價格 < EQ (折價區)
             </div>
-            <table><thead><tr><th>代號</th><th>價格</th><th>狀態</th><th>Beta</th><th>訊號</th></tr></thead><tbody>{screener_rows}</tbody></table>
+            <table><thead><tr><th>代號</th><th>價格</th><th>趨勢</th><th>訊號</th></tr></thead><tbody>{screener_rows}</tbody></table>
         </div>
 
         <div id="news" class="content">
-            <h3 class="sector-title">🔥 今日美股熱點 (Google News)</h3>
-            {market_news_block}
+            <h3 class="sector-title">🔥 本週市場熱門 (Weekly Hot)</h3>
+            {weekly_news_html}
         </div>
         
-        <div class="time">最後更新: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}</div>
+        <div class="time">Updated: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}</div>
 
         <div id="modal" class="modal" onclick="document.getElementById('modal').style.display='none'">
             <div class="m-content" onclick="event.stopPropagation()">
                 <h2 id="m-ticker" style="margin-top:0"></h2>
                 
-                <div id="m-deploy"></div>
+                <div id="m-deploy" class="ai-box"></div>
                 
-                <div>
-                    <span class="chart-lbl">📅 日線圖 (趨勢與區域)</span>
-                    <div id="chart-d"></div>
-                </div>
-                <div>
-                    <span class="chart-lbl">⏱️ 小時圖 (SMC入場細節)</span>
-                    <div id="chart-h"></div>
-                </div>
+                <div><span style="color:#3b82f6; font-weight:bold; font-size:0.9rem;">📅 日線結構 (Structure)</span><div id="chart-d"></div></div>
+                <div style="margin-top:15px;"><span style="color:#3b82f6; font-weight:bold; font-size:0.9rem;">⏱️ 小時入場 (Execution)</span><div id="chart-h"></div></div>
                 
                 <button class="close-btn" onclick="document.getElementById('modal').style.display='none'">關閉視窗</button>
             </div>
@@ -392,11 +413,11 @@ def main():
             if (!data) return;
 
             document.getElementById('modal').style.display = 'flex';
-            document.getElementById('m-ticker').innerText = ticker + " (" + data.signal + ")";
+            document.getElementById('m-ticker').innerText = ticker;
             document.getElementById('m-deploy').innerHTML = data.deploy;
             
-            const dImg = data.img_d ? '<img src="' + data.img_d + '">' : '<div style="padding:20px;text-align:center;color:#666">暫無圖表數據</div>';
-            const hImg = data.img_h ? '<img src="' + data.img_h + '">' : '<div style="padding:20px;text-align:center;color:#666">暫無圖表數據</div>';
+            const dImg = data.img_d ? '<img src="' + data.img_d + '">' : '<div style="padding:20px;text-align:center;color:#666">No Data</div>';
+            const hImg = data.img_h ? '<img src="' + data.img_h + '">' : '<div style="padding:20px;text-align:center;color:#666">No Data</div>';
             
             document.getElementById('chart-d').innerHTML = dImg;
             document.getElementById('chart-h').innerHTML = hImg;
@@ -408,7 +429,7 @@ def main():
     
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(final_html)
-    print("✅ index.html 生成成功！")
+    print("✅ index.html generated successfully!")
 
 if __name__ == "__main__":
     main()
