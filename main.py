@@ -14,7 +14,7 @@ from datetime import datetime, timedelta
 # --- 0. 讀取 API KEY ---
 API_KEY = os.environ.get("POLYGON_API_KEY")
 
-# --- 1. 完整觀察清單 ---
+# --- 1. 設定觀察清單 ---
 SECTORS = {
     "💎 科技七巨頭": ["NVDA", "TSLA", "AAPL", "MSFT", "AMZN", "GOOGL", "META"],
     "⚡ 半導體": ["TSM", "AMD", "AVGO", "MU", "INTC", "ARM", "QCOM", "SMCI"],
@@ -23,26 +23,22 @@ SECTORS = {
 }
 ALL_TICKERS = [t for sector in SECTORS.values() for t in sector]
 
-# --- 2. Polygon 數據請求 (已修正日期問題) ---
+# --- 2. Polygon 數據請求 ---
 def get_polygon_data(ticker, multiplier=1, timespan='day'):
     if not API_KEY: return None
-    
     try:
-        # 🌟 關鍵修正：強制抓取「昨天」以前的數據，避開 Starter 方案限制
+        # 抓取昨天以前的數據
         end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
         start_date = (datetime.now() - timedelta(days=250)).strftime('%Y-%m-%d')
         
         url = f"https://api.polygon.io/v2/aggs/ticker/{ticker}/range/{multiplier}/{timespan}/{start_date}/{end_date}?adjusted=true&sort=asc&limit=500&apiKey={API_KEY}"
         
         resp = requests.get(url, timeout=10)
-        
-        # 簡單重試機制
         if resp.status_code == 429: # Rate Limit
             time.sleep(1)
             resp = requests.get(url, timeout=10)
 
         data = resp.json()
-        
         if data.get('status') == 'OK' and data.get('results'):
             df = pd.DataFrame(data['results'])
             df['Date'] = pd.to_datetime(df['t'], unit='ms')
@@ -51,72 +47,61 @@ def get_polygon_data(ticker, multiplier=1, timespan='day'):
             return df[['Open', 'High', 'Low', 'Close', 'Volume']]
         else:
             return None
-            
     except Exception as e:
         print(f"Error fetching {ticker}: {e}")
         return None
 
 def get_polygon_news():
-    if not API_KEY: return "<div style='padding:20px'>API Key Missing</div>"
+    if not API_KEY: return "<div>API Key Missing</div>"
     news_html = ""
     try:
-        # 抓取本週熱門新聞
         last_week = (datetime.now() - timedelta(days=7)).strftime('%Y-%m-%d')
         tickers = "SPY,QQQ,NVDA,TSLA,AAPL,AMD"
         url = f"https://api.polygon.io/v2/reference/news?ticker={tickers}&published_utc.gte={last_week}&limit=12&sort=published_utc&order=desc&apiKey={API_KEY}"
-        
         resp = requests.get(url, timeout=10)
         data = resp.json()
-        
         if data.get('results'):
             for item in data['results']:
                 title = item.get('title')
-                article_url = item.get('article_url')
-                publisher = item.get('publisher', {}).get('name', 'Unknown')
-                pub_time = item.get('published_utc', '')
-                
-                try:
-                    dt = datetime.strptime(pub_time, "%Y-%m-%dT%H:%M:%SZ")
-                    date_str = dt.strftime('%m/%d %H:%M')
-                except: date_str = ""
-                
-                news_html += f"""
-                <div class="news-item">
-                    <div class="news-meta">{publisher} • {date_str}</div>
-                    <a href="{article_url}" target="_blank" class="news-title">{title}</a>
-                </div>
-                """
+                url = item.get('article_url')
+                pub = item.get('publisher', {}).get('name', 'Unknown')
+                news_html += f"<div class='news-item'><div class='news-meta'>{pub}</div><a href='{url}' target='_blank' class='news-title'>{title}</a></div>"
         else:
-            news_html = "<div style='padding:20px'>暫無熱門新聞</div>"
+            news_html = "<div style='padding:20px'>暫無新聞</div>"
     except:
         news_html = "<div style='padding:20px'>新聞載入失敗</div>"
     return news_html
 
-# --- 3. SMC 戰術分析邏輯 ---
+# --- 3. SMC 嚴格分析邏輯 ---
 def calculate_smc(df):
-    """計算 SMC 關鍵位"""
-    window = 50
-    recent = df.tail(window)
-    
-    bsl = recent['High'].max() # TP (上方流動性)
-    ssl = recent['Low'].min()  # SL (下方流動性)
-    eq = (bsl + ssl) / 2       # 平衡點
-    
-    best_entry = eq
-    # 尋找折價區內的最近 FVG
-    for i in range(len(recent)-1, 2, -1):
-        if recent['Low'].iloc[i] > recent['High'].iloc[i-2]: # Bullish FVG
-            fvg_top = recent['Low'].iloc[i]
-            if fvg_top < eq: # 必須在折價區
-                best_entry = fvg_top
-                break
-                
-    return bsl, ssl, eq, best_entry, ssl * 0.99
+    try:
+        window = 50
+        recent = df.tail(window)
+        
+        bsl = float(recent['High'].max()) # TP
+        ssl = float(recent['Low'].min())  # SL
+        eq = (bsl + ssl) / 2       # 平衡點
+        
+        best_entry = None # 預設為 None
+        
+        # 尋找折價區內的最近 Bullish FVG
+        for i in range(len(recent)-1, 2, -1):
+            if recent['Low'].iloc[i] > recent['High'].iloc[i-2]: # Bullish FVG
+                fvg_top = float(recent['Low'].iloc[i])
+                if fvg_top < eq: # 嚴格條件：必須在折價區
+                    best_entry = fvg_top
+                    break
+        
+        sl_price = ssl * 0.99
+        return bsl, ssl, eq, best_entry, sl_price
+    except:
+        last = float(df['Close'].iloc[-1])
+        return last*1.1, last*0.9, last, None, last*0.9
 
 def generate_chart(df, ticker, title, entry, sl, tp):
     try:
         plot_df = df.tail(60)
-        if len(plot_df) < 20: return None
+        if len(plot_df) < 10: return None
         
         swing_high = plot_df['High'].max()
         swing_low = plot_df['Low'].min()
@@ -125,53 +110,50 @@ def generate_chart(df, ticker, title, entry, sl, tp):
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
         s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#334155', facecolor='#0f172a')
         
-        # 繪製戰術線
-        hlines = dict(
-            hlines=[tp, entry, sl],
-            colors=['#10b981', '#3b82f6', '#ef4444'],
-            linewidths=[1.5, 1.5, 1.5],
-            linestyle=['-', '--', '-']
-        )
-        
-        fig, axlist = mpf.plot(plot_df, type='candle', style=s, volume=False,
-            title=dict(title=f"{ticker} - {title}", color='white', size=10),
-            hlines=hlines, figsize=(5, 3), returnfig=True)
+        # 只有當 entry 存在時，才畫三條線
+        hlines = []
+        if entry is not None:
+            hlines = dict(hlines=[tp, entry, sl], colors=['#10b981', '#3b82f6', '#ef4444'], linewidths=[1.5, 1.5, 1.5], linestyle=['-', '--', '-'])
+            fig, axlist = mpf.plot(plot_df, type='candle', style=s, volume=False, title=dict(title=f"{ticker} - {title}", color='white', size=10), hlines=hlines, figsize=(5, 3), returnfig=True)
+        else:
+            fig, axlist = mpf.plot(plot_df, type='candle', style=s, volume=False, title=dict(title=f"{ticker} - {title}", color='white', size=10), figsize=(5, 3), returnfig=True)
         
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # 文字標註
-        ax.text(x_min, tp, f" TP ${tp:.2f}", color='#10b981', fontsize=7, va='bottom', fontweight='bold')
-        ax.text(x_min, entry, f" ENTRY ${entry:.2f}", color='#3b82f6', fontsize=7, va='bottom', fontweight='bold')
-        ax.text(x_min, sl, f" SL ${sl:.2f}", color='#ef4444', fontsize=7, va='top', fontweight='bold')
+        if entry is not None:
+            ax.text(x_min, tp, f" TP ${tp:.2f}", color='#10b981', fontsize=8, va='bottom', fontweight='bold')
+            ax.text(x_min, entry, f" ENTRY ${entry:.2f}", color='#3b82f6', fontsize=8, va='bottom', fontweight='bold')
+            ax.text(x_min, sl, f" SL ${sl:.2f}", color='#ef4444', fontsize=8, va='top', fontweight='bold')
+        else:
+            ax.text((x_min+x_max)/2, (swing_high+swing_low)/2, "NO FVG ENTRY", color='white', fontsize=10, ha='center', alpha=0.3, rotation=45)
         
         # 區域標示
         rect_prem = patches.Rectangle((x_min, eq), x_max-x_min, swing_high-eq, linewidth=0, facecolor='#ef4444', alpha=0.05)
         ax.add_patch(rect_prem)
-        ax.text(x_min, swing_high, " Premium (Sell)", color='#ef4444', fontsize=6, va='top', alpha=0.6)
+        ax.text(x_min, swing_high, " Premium", color='#ef4444', fontsize=6, va='top', alpha=0.6)
         
         rect_disc = patches.Rectangle((x_min, swing_low), x_max-x_min, eq-swing_low, linewidth=0, facecolor='#10b981', alpha=0.05)
         ax.add_patch(rect_disc)
-        ax.text(x_min, swing_low, " Discount (Buy)", color='#10b981', fontsize=6, va='bottom', alpha=0.6)
+        ax.text(x_min, swing_low, " Discount", color='#10b981', fontsize=6, va='bottom', alpha=0.6)
 
         buf = BytesIO()
         fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=70)
         plt.close(fig)
         return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
-    except:
+    except Exception as e:
+        print(f"Plot Error {ticker}: {e}")
         return None
 
 # --- 4. 主程式 ---
 def main():
-    print("🚀 Starting Polygon Pro Analysis...")
+    print("🚀 Starting Polygon Pro Analysis (Strict SMC Fix)...")
     
     if not API_KEY:
-        print("❌ API Key Missing")
-        return # 這裡可以 return 因為我們確定 Key 沒問題了
+        print("❌ FATAL: POLYGON_API_KEY is missing!")
+        return 
     
-    # 1. 抓新聞
     weekly_news_html = get_polygon_news()
-
     sector_html_blocks = ""
     screener_rows = ""
     APP_DATA = {}
@@ -180,14 +162,12 @@ def main():
         cards_in_sector = ""
         for t in tickers:
             try:
-                # 避免頻率限制
-                time.sleep(0.2) 
+                time.sleep(0.1)
                 
-                # 2. 獲取數據
+                # 1. 獲取數據
                 df_d = get_polygon_data(t, 1, 'day')
                 if df_d is None or len(df_d) < 50: continue
                 
-                # 嘗試抓小時線，失敗就用日線
                 df_h = get_polygon_data(t, 1, 'hour')
                 if df_h is None: df_h = df_d
 
@@ -195,52 +175,71 @@ def main():
                 sma200 = df_d['Close'].rolling(200).mean().iloc[-1]
                 if pd.isna(sma200): sma200 = curr_price
 
-                # 3. SMC 計算
+                # 2. SMC 計算
                 bsl, ssl, eq, entry, sl = calculate_smc(df_d)
                 tp = bsl
 
-                # 4. 繪圖
+                # 3. 繪圖
                 img_d = generate_chart(df_d, t, "Daily Structure", entry, sl, tp)
                 if not img_d: continue
                 
-                img_h = generate_chart(df_h, t, "Hourly Entry", entry, sl, tp)
+                img_h = generate_chart(df_h, t, "Hourly Execution", entry, sl, tp)
                 if not img_h: img_h = ""
 
-                # 5. 訊號與AI文案
+                # 4. 訊號與 AI 分析
                 is_bullish = curr_price > sma200
-                signal = "LONG" if is_bullish and curr_price < eq else "WAIT"
+                
+                # 訊號判斷
+                if is_bullish and (curr_price < eq) and (entry is not None):
+                    signal = "LONG"
+                else:
+                    signal = "WAIT"
+                
                 cls = "b-long" if signal == "LONG" else "b-wait"
-                
-                risk = entry - sl
-                reward = tp - entry
-                rr = reward / risk if risk > 0 else 0
-                
                 trend_str = "多頭 (Bullish)" if is_bullish else "空頭 (Bearish)"
                 
+                # 🌟 關鍵修正：將運算移到 IF 判斷內，避免 entry 為 None 時報錯
                 if signal == "LONG":
+                    # 只有確定有 entry 時才算數學
+                    risk = entry - sl
+                    reward = tp - entry
+                    rr = reward / risk if risk > 0 else 0
+                    
                     ai_html = f"""
                     <div class='deploy-box long'>
-                        <div class='deploy-title'>✅ LONG SETUP (做多建議)</div>
+                        <div class='deploy-title'>✅ LONG SETUP (做多訊號)</div>
                         <ul class='deploy-list'>
-                            <li><b>入場 (Entry):</b> ${entry:.2f}</li>
+                            <li><b>入場 (FVG):</b> ${entry:.2f}</li>
                             <li><b>止損 (SL):</b> ${sl:.2f}</li>
                             <li><b>止盈 (TP):</b> ${tp:.2f}</li>
                             <li><b>盈虧比:</b> {rr:.1f}R</li>
                         </ul>
                         <div style='margin-top:10px; font-size:0.85rem'>
-                            🤖 <b>AI 分析:</b> 股價位於 200MA 之上且回調至折價區，SMC 結構完整，建議尋找入場機會。
+                            🤖 <b>AI 分析:</b> 股價站上200MA，回調至折價區，並成功在支撐位附近發現「看漲缺口 (Bullish FVG)」，結構完整，建議佈局。
                         </div>
                     </div>
                     """
                 else:
+                    # WAIT 的不同理由分析
+                    reason = ""
+                    if not is_bullish:
+                        reason = "股價低於 200MA，趨勢偏空，不宜做多。"
+                    elif curr_price >= eq:
+                        reason = "股價位於溢價區 (Premium)，價格過高，等待回調。"
+                    elif entry is None:
+                        reason = "雖位於折價區，但<b>找不到清晰的 FVG 缺口</b>作為入場依據，結構不夠漂亮。"
+                    
                     ai_html = f"""
                     <div class='deploy-box wait'>
                         <div class='deploy-title'>⏳ WAIT (觀望建議)</div>
                         <ul class='deploy-list'>
-                            <li>目前位置: <b>Premium (溢價區)</b></li>
-                            <li>趨勢狀態: {trend_str}</li>
-                            <li>建議等待回調至: <b>${entry:.2f}</b></li>
+                            <li><b>趨勢狀態:</b> {trend_str}</li>
+                            <li><b>目前位置:</b> {"溢價區 (貴)" if curr_price >= eq else "折價區 (便宜)"}</li>
+                            <li><b>SMC 結構:</b> { "無有效 FVG" if entry is None else "有 FVG" }</li>
                         </ul>
+                        <div style='margin-top:10px; font-size:0.85rem; color:#cbd5e1;'>
+                            🤖 <b>AI 建議:</b> {reason}
+                        </div>
                     </div>
                     """
                 
@@ -249,11 +248,11 @@ def main():
                 cards_in_sector += f"""
                 <div class="card" onclick="openModal('{t}')">
                     <div class="head"><div><div class="code">{t}</div><div class="price">${curr_price:.2f}</div></div><span class="badge {cls}">{signal}</span></div>
-                    <div class="hint">點擊查看分析 ↗</div>
+                    <div class="hint">Tap for Analysis ↗</div>
                 </div>"""
                 
-                if is_bullish and curr_price < eq:
-                    screener_rows += f"<tr><td>{t}</td><td>${curr_price:.2f}</td><td class='g'>多頭回調</td><td><span class='badge {cls}'>{signal}</span></td></tr>"
+                if signal == "LONG":
+                    screener_rows += f"<tr><td>{t}</td><td>${curr_price:.2f}</td><td class='g'>Perfect Setup</td><td><span class='badge {cls}'>{signal}</span></td></tr>"
 
             except Exception as e:
                 print(f"Error processing {t}: {e}")
@@ -270,7 +269,7 @@ def main():
     <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>DailyDip Pro (Polygon)</title>
+    <title>DailyDip Pro (SMC Strict)</title>
     <style>
         :root {{ --bg:#0f172a; --card:#1e293b; --text:#f8fafc; --acc:#3b82f6; --g:#10b981; --r:#ef4444; --y:#fbbf24; }}
         body {{ background:var(--bg); color:var(--text); font-family:sans-serif; margin:0; padding:10px; }}
@@ -302,18 +301,24 @@ def main():
         .deploy-box.wait {{ background:rgba(251,191,36,0.1); border-color:var(--y); }}
         .close-btn {{ width:100%; padding:12px; background:var(--acc); border:none; color:white; border-radius:6px; font-weight:bold; margin-top:10px; cursor:pointer; }}
         .time {{ text-align:center; color:#666; font-size:0.7rem; margin-top:30px; }}
+        .chart-lbl {{ color:var(--acc); font-weight:bold; display:block; margin-bottom:5px; font-size:0.9rem; margin-top:10px; }}
     </style>
     </head>
     <body>
         <div class="tabs">
             <div class="tab active" onclick="setTab('overview', this)">📊 市場概況</div>
             <div class="tab" onclick="setTab('screener', this)">🔍 強勢篩選</div>
-            <div class="tab" onclick="setTab('news', this)">📰 熱門新聞</div>
+            <div class="tab" onclick="setTab('news', this)">📰 Polygon 新聞</div>
         </div>
         
-        <div id="overview" class="content active">{sector_html_blocks if sector_html_blocks else '<div style="padding:20px;text-align:center">數據載入中或 API 連線異常，請稍後再試。</div>'}</div>
-        <div id="screener" class="content"><table><thead><tr><th>代號</th><th>價格</th><th>狀態</th><th>訊號</th></tr></thead><tbody>{screener_rows}</tbody></table></div>
-        <div id="news" class="content"><h3 class="sector-title">本週熱門新聞 (Polygon)</h3>{weekly_news_html}</div>
+        <div id="overview" class="content active">{sector_html_blocks if sector_html_blocks else '<div style="text-align:center;padding:50px">No Data Loaded.</div>'}</div>
+        <div id="screener" class="content">
+            <div style="padding:10px; background:rgba(16,185,129,0.1); margin-bottom:15px; border-radius:6px; font-size:0.9rem;">
+                🎯 <b>SMC 嚴格篩選：</b> 只有同時滿足「多頭趨勢 + 折價區 + 有效 FVG 缺口」的股票才會顯示在下方。
+            </div>
+            <table><thead><tr><th>Ticker</th><th>Price</th><th>Status</th><th>Signal</th></tr></thead><tbody>{screener_rows}</tbody></table>
+        </div>
+        <div id="news" class="content"><h3 class="sector-title">Polygon Hot News</h3>{weekly_news_html}</div>
         
         <div class="time">Powered by Polygon.io | Updated: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}</div>
 
@@ -321,9 +326,9 @@ def main():
             <div class="m-content" onclick="event.stopPropagation()">
                 <h2 id="m-ticker" style="margin-top:0"></h2>
                 <div id="m-deploy"></div>
-                <div><b style="color:#3b82f6">日線結構 (Daily Structure)</b><div id="chart-d"></div></div>
-                <div style="margin-top:15px;"><b style="color:#3b82f6">小時入場 (Hourly Entry)</b><div id="chart-h"></div></div>
-                <button class="close-btn" onclick="document.getElementById('modal').style.display='none'">關閉視窗</button>
+                <div><span class="chart-lbl">📅 Daily Structure</span><div id="chart-d"></div></div>
+                <div><span class="chart-lbl">⏱️ Hourly Execution</span><div id="chart-h"></div></div>
+                <button class="close-btn" onclick="document.getElementById('modal').style.display='none'">Close</button>
             </div>
         </div>
 
