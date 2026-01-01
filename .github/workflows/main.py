@@ -1,6 +1,6 @@
 import os
 import matplotlib
-matplotlib.use('Agg') # 1. 強制後台繪圖 (必須在最上面)
+matplotlib.use('Agg') # 1. 強制後台繪圖 (修復無圖問題的關鍵)
 import requests
 import yfinance as yf
 import mplfinance as mpf
@@ -27,7 +27,7 @@ SECTORS = {
     "📉 指數 ETF": ["SPY", "QQQ", "IWM", "TQQQ", "SQQQ"]
 }
 
-# --- 2. 新聞 ---
+# --- 2. 新聞 (Polygon) ---
 def get_polygon_news():
     if not API_KEY: return "<div style='padding:20px'>API Key Missing</div>"
     news_html = ""
@@ -46,21 +46,19 @@ def get_polygon_news():
     except: news_html = "News Error"
     return news_html
 
-# --- 3. 數據獲取 (核心修復：強制格式化) ---
+# --- 3. 數據獲取 (核心修復：強制清洗 MultiIndex) ---
 def fetch_data_safe(ticker, period, interval):
     try:
         # 下載數據
         df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
         
-        # 1. 檢查數據是否為空
         if df is None or df.empty: return None
 
-        # 2. 關鍵修復：處理 MultiIndex (這就是導致沒圖的元兇)
-        # 如果欄位是 ('Close', 'AAPL')，將其轉為 'Close'
+        # ⚠️ 關鍵修復：如果欄位是 ('Close', 'AAPL')，強制轉為 'Close'
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
-        # 3. 檢查必要欄位
+        # 檢查必要欄位
         required = ['Open', 'High', 'Low', 'Close']
         if not all(col in df.columns for col in required): return None
             
@@ -69,7 +67,7 @@ def fetch_data_safe(ticker, period, interval):
         print(f"Download Error {ticker}: {e}")
         return None
 
-# --- 4. 技術指標與評分 ---
+# --- 4. 技術指標與評分 (含詳解生成) ---
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(period).mean()
@@ -79,11 +77,11 @@ def calculate_rsi(series, period=14):
 
 def calculate_quality_score(df, entry, sl, tp, is_bullish):
     """
-    回傳分數與具體加分理由 (Explanation List)
+    回傳: (分數, 理由列表)
     """
     try:
         score = 60
-        reasons = [] # 儲存為什麼高分的原因
+        reasons = [] # 這裡儲存加分理由
         close = df['Close'].iloc[-1]
         
         # RR (盈虧比)
@@ -108,14 +106,14 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish):
             reasons.append(f"📉 RSI 黃金回調位 ({int(rsi)})")
         elif rsi > 70: 
             score -= 15
-            reasons.append("⚠️ RSI 過熱")
+            reasons.append("⚠️ RSI 過熱 (>70)")
 
         # 趨勢
         sma50 = df['Close'].rolling(50).mean().iloc[-1]
         sma200 = df['Close'].rolling(200).mean().iloc[-1]
         if close > sma50 > sma200: 
             score += 10
-            reasons.append("📈 多頭排列強勢")
+            reasons.append("📈 多頭排列強勢 (價格 > 50MA > 200MA)")
         if close < sma50: 
             score -= 5
 
@@ -123,14 +121,14 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish):
         dist_pct = abs(close - entry) / entry
         if dist_pct < 0.01: 
             score += 20
-            reasons.append("🎯 價格位於狙擊入場區")
+            reasons.append("🎯 價格位於狙擊入場區 (Spread < 1%)")
         elif dist_pct < 0.03: 
             score += 10
 
         return min(max(int(score), 0), 99), reasons
     except: return 50, []
 
-# --- 5. SMC 運算 ---
+# --- 5. SMC 運算 (含 FVG 列表) ---
 def calculate_smc(df):
     try:
         window = 50
@@ -143,6 +141,7 @@ def calculate_smc(df):
         fvg_list = []
         
         for i in range(2, len(recent)):
+            # Bullish FVG
             if recent['Low'].iloc[i] > recent['High'].iloc[i-2]:
                 gap_top = float(recent['Low'].iloc[i])
                 gap_bot = float(recent['High'].iloc[i-2])
@@ -150,6 +149,7 @@ def calculate_smc(df):
                 if gap_top < eq:
                     best_entry = gap_top
                     found_fvg = True
+            # Bearish FVG
             elif recent['High'].iloc[i] < recent['Low'].iloc[i-2]:
                 gap_top = float(recent['Low'].iloc[i-2])
                 gap_bot = float(recent['High'].iloc[i])
@@ -160,13 +160,14 @@ def calculate_smc(df):
         last = float(df['Close'].iloc[-1])
         return last*1.05, last*0.95, last, last, last*0.94, False, []
 
-# --- 6. 繪圖核心 ---
+# --- 6. 繪圖核心 (Matplotlib PNG 模式) ---
 def generate_chart(df, ticker, title, entry, sl, tp, fvg_list, is_wait):
     try:
-        plt.close('all')
+        plt.close('all') # 重要：清除舊圖
         plot_df = df.tail(60)
         if len(plot_df) < 10: return None
         
+        # 確保數值
         entry = entry if not np.isnan(entry) else plot_df['Close'].iloc[-1]
         sl = sl if not np.isnan(sl) else plot_df['Low'].min()
         tp = tp if not np.isnan(tp) else plot_df['High'].max()
@@ -174,6 +175,7 @@ def generate_chart(df, ticker, title, entry, sl, tp, fvg_list, is_wait):
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
         s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#1e293b', facecolor='#0f172a')
         
+        # 繪製 K 線
         fig, axlist = mpf.plot(plot_df, type='candle', style=s, volume=False,
             title=dict(title=f"{ticker} - {title}", color='white', size=10),
             figsize=(5, 3), returnfig=True)
@@ -181,34 +183,28 @@ def generate_chart(df, ticker, title, entry, sl, tp, fvg_list, is_wait):
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # 繪製 FVG (修正索引)
+        # 繪製 FVG 色塊 (這就是你想要的 SMC 指標)
         for fvg in fvg_list:
-            plot_idx_start = len(df) - 60 # 必須跟上面的 tail(60) 一致
+            plot_idx_start = len(df) - 60 
             rel_idx = fvg['idx'] - plot_idx_start
             if 0 <= rel_idx < 60:
                 color = '#10b981' if fvg['type'] == 'bull' else '#ef4444'
                 rect = patches.Rectangle((rel_idx, fvg['bot']), x_max - rel_idx, fvg['top'] - fvg['bot'],
-                                         linewidth=0, facecolor=color, alpha=0.3)
+                                         linewidth=0, facecolor=color, alpha=0.25)
                 ax.add_patch(rect)
 
-        # 線條
+        # 繪製 Entry/SL/TP 線條
         line_style = ':' if is_wait else '-'
         ax.axhline(tp, color='#10b981', linestyle=line_style, linewidth=1)
         ax.axhline(entry, color='#3b82f6', linestyle=line_style, linewidth=1)
         ax.axhline(sl, color='#ef4444', linestyle=line_style, linewidth=1)
         
-        # 文字
+        # 文字標註
         ax.text(x_min, tp, " TP", color='#10b981', fontsize=8, va='bottom', fontweight='bold')
         ax.text(x_min, entry, " ENTRY", color='#3b82f6', fontsize=8, va='bottom', fontweight='bold')
         ax.text(x_min, sl, " SL", color='#ef4444', fontsize=8, va='top', fontweight='bold')
 
-        # 盈虧區間
-        if not is_wait:
-            rect_profit = patches.Rectangle((x_min, entry), x_max-x_min, tp-entry, linewidth=0, facecolor='#10b981', alpha=0.1)
-            ax.add_patch(rect_profit)
-            rect_loss = patches.Rectangle((x_min, sl), x_max-x_min, entry-sl, linewidth=0, facecolor='#ef4444', alpha=0.1)
-            ax.add_patch(rect_loss)
-
+        # 轉成 Base64 圖片
         buf = BytesIO()
         fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=80)
         plt.close(fig)
@@ -217,14 +213,14 @@ def generate_chart(df, ticker, title, entry, sl, tp, fvg_list, is_wait):
         print(f"Chart fail {ticker}: {e}")
         return None
 
-# --- 7. 單一股票處理 ---
+# --- 7. 單一股票處理 (含 >90分 解釋邏輯) ---
 def process_ticker(t, app_data_dict):
     try:
-        time.sleep(0.5)
+        time.sleep(0.5) # 避免 Rate Limit
+        
+        # 下載
         df_d = fetch_data_safe(t, "1y", "1d")
-        if df_d is None or len(df_d) < 50: 
-            print(f"Skip {t}: No data")
-            return None
+        if df_d is None or len(df_d) < 50: return None
 
         df_h = fetch_data_safe(t, "1mo", "1h")
         if df_h is None or df_h.empty: df_h = df_d
@@ -243,50 +239,53 @@ def process_ticker(t, app_data_dict):
         in_discount = curr < eq
         signal = "LONG" if (is_bullish and in_discount and found_fvg) else "WAIT"
         
-        # 評分與理由
+        # 評分與詳細理由 (reasons)
         score, reasons = calculate_quality_score(df_d, entry, sl, tp, is_bullish)
         
         # 繪圖
         is_wait = (signal == "WAIT")
         img_d = generate_chart(df_d, t, "Daily SMC", entry, sl, tp, fvg_list_d, is_wait)
-        img_h = generate_chart(df_h, t, "Hourly", entry, sl, tp, fvg_list_h, is_wait)
+        img_h = generate_chart(df_h, t, "Hourly Entry", entry, sl, tp, fvg_list_h, is_wait)
         
         img_d = img_d if img_d else ""
         img_h = img_h if img_h else ""
 
-        # 文案
+        # 文案生成
         cls = "b-long" if signal == "LONG" else "b-wait"
         risk = entry - sl
         reward = tp - entry
         rr = reward / risk if risk > 0 else 0
         score_color = "#10b981" if score >= 90 else ("#3b82f6" if score >= 80 else "#fbbf24")
         
-        reason_html = "".join([f"<li>✅ {r}</li>" for r in reasons])
+        # 🌟 90分以上詳解功能 (恢復)
+        elite_html = ""
+        if score >= 90:
+            reasons_html = "".join([f"<li>✅ {r}</li>" for r in reasons])
+            elite_html = f"""
+            <div style='background:rgba(16,185,129,0.1); border:1px solid #10b981; padding:10px; border-radius:6px; margin:10px 0;'>
+                <div style='font-weight:bold; color:#10b981; margin-bottom:5px;'>💎 為什麼值得入手？</div>
+                <ul style='margin:0; padding-left:20px; font-size:0.85rem; color:#d1d5db;'>
+                    {reasons_html}
+                </ul>
+            </div>
+            """
         
         if signal == "LONG":
-            elite_badge = "<div style='background:#10b981;color:white;padding:2px 6px;border-radius:4px;display:inline-block;font-size:0.7rem;margin-bottom:5px;'>💎 ELITE SETUP</div>" if score >= 90 else ""
-            
             ai_html = f"""
             <div class='deploy-box long'>
                 <div class='deploy-title'>✅ LONG SETUP</div>
-                {elite_badge}
-                <div style='border-bottom:1px solid #333;padding-bottom:5px;margin-bottom:5px;'>
-                    <span>評分: <b style='color:{score_color};font-size:1.1em'>{score}</b></span> | 
-                    <span>RR: <b style='color:#10b981'>{rr:.1f}R</b></span>
+                <div style='display:flex;justify-content:space-between;border-bottom:1px solid #333;padding-bottom:5px;margin-bottom:5px;'>
+                    <span>🏆 評分: <b style='color:{score_color};font-size:1.1em'>{score}</b></span>
+                    <span>💰 RR: <b style='color:#10b981'>{rr:.1f}R</b></span>
                 </div>
-                <div style='margin-bottom:8px; font-size:0.85rem'>
-                    <b>為什麼值得入手？</b>
-                    <ul style='padding-left:15px; margin:5px 0;'>
-                        {reason_html}
-                    </ul>
-                </div>
-                <ul class='deploy-list' style='border-top:1px solid #444; padding-top:5px'>
+                {elite_html}
+                <ul class='deploy-list' style='margin-top:10px'>
                     <li>TP: ${tp:.2f}</li><li>Entry: ${entry:.2f}</li><li>SL: ${sl:.2f}</li>
                 </ul>
             </div>"""
         else:
-            wait_reason = "無FVG" if not found_fvg else ("逆勢" if not is_bullish else "溢價區")
-            ai_html = f"<div class='deploy-box wait'><div class='deploy-title'>⏳ WAIT</div><div>評分: <b style='color:#94a3b8'>{score}</b></div><ul class='deploy-list'><li>狀態: {wait_reason}</li><li>參考入場: ${entry:.2f}</li></ul></div>"
+            reason = "無FVG" if not found_fvg else ("逆勢" if not is_bullish else "溢價區")
+            ai_html = f"<div class='deploy-box wait'><div class='deploy-title'>⏳ WAIT</div><div>評分: <b style='color:#94a3b8'>{score}</b></div><ul class='deploy-list'><li>狀態: {reason}</li><li>參考入場: ${entry:.2f}</li></ul></div>"
             
         app_data_dict[t] = {"signal": signal, "deploy": ai_html, "img_d": img_d, "img_h": img_h, "score": score}
         return {"ticker": t, "price": curr, "signal": signal, "cls": cls, "score": score}
@@ -296,7 +295,7 @@ def process_ticker(t, app_data_dict):
 
 # --- 8. 主程式 ---
 def main():
-    print("🚀 Starting Analysis (Chart Fix + Detailed Score)...")
+    print("🚀 Starting Analysis (Stable Image + 90+ Analysis)...")
     weekly_news_html = get_polygon_news()
     
     APP_DATA, sector_html_blocks, screener_rows_list = {}, "", []
@@ -311,6 +310,7 @@ def main():
                 if res['signal'] == "LONG":
                     screener_rows_list.append(res)
         
+        # 排序
         sector_results.sort(key=lambda x: x['score'], reverse=True)
         
         for res in sector_results:
@@ -320,6 +320,7 @@ def main():
             
         if cards: sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards}</div>"
 
+    # Screener 表格
     screener_rows_list.sort(key=lambda x: x['score'], reverse=True)
     screener_html = ""
     for res in screener_rows_list:
