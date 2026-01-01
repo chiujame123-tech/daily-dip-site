@@ -1,6 +1,6 @@
 import os
 import matplotlib
-matplotlib.use('Agg') # 強制後台繪圖，防止 GitHub Actions 報錯
+matplotlib.use('Agg') # 強制後台繪圖
 import requests
 import yfinance as yf
 import mplfinance as mpf
@@ -51,40 +51,28 @@ def get_polygon_news():
     except: news_html = "News Error"
     return news_html
 
-# --- 3. SMC 核心運算 (含 FVG 列表) ---
+# --- 3. SMC 核心運算 ---
 def calculate_smc_details(df):
-    """
-    計算 Entry, SL, TP 並回傳所有發現的 FVG 列表供繪圖使用。
-    """
     try:
         window = 50
         recent = df.tail(window)
-        
-        bsl = float(recent['High'].max()) # TP
-        ssl = float(recent['Low'].min())  # SL
-        eq = (bsl + ssl) / 2       # 平衡點
-        
+        bsl = float(recent['High'].max())
+        ssl = float(recent['Low'].min())
+        eq = (bsl + ssl) / 2
         best_entry = eq
         found_fvg = False
-        
-        # 儲存所有 FVG 用於繪圖 [{'idx': 10, 'top': 100, 'bot': 90, 'type': 'bull'}]
         fvg_list = []
         
-        # 遍歷尋找 FVG
-        # 這裡使用相對索引，因為 mplfinance 繪圖是用 0,1,2...
         for i in range(2, len(recent)):
             # Bullish FVG
             if recent['Low'].iloc[i] > recent['High'].iloc[i-2]:
                 gap_top = float(recent['Low'].iloc[i])
                 gap_bot = float(recent['High'].iloc[i-2])
                 fvg_list.append({'idx': i-1, 'top': gap_top, 'bot': gap_bot, 'type': 'bull'})
-                
-                # 如果這個缺口在折價區，選它做 Entry
                 if gap_top < eq:
                     best_entry = gap_top
                     found_fvg = True
-            
-            # Bearish FVG (僅供繪圖參考)
+            # Bearish FVG
             elif recent['High'].iloc[i] < recent['Low'].iloc[i-2]:
                 gap_top = float(recent['Low'].iloc[i-2])
                 gap_bot = float(recent['High'].iloc[i])
@@ -96,51 +84,32 @@ def calculate_smc_details(df):
         last = float(df['Close'].iloc[-1])
         return last*1.05, last*0.95, last, last, last*0.94, False, []
 
-# --- 4. 計算勝率評分 (Quant Score) ---
+# --- 4. 計算勝率評分 ---
 def calculate_win_score(df, is_bullish, in_discount, has_fvg):
-    score = 50 # 基礎分
-    
-    # 趨勢加分
+    score = 50
     close = df['Close'].iloc[-1]
-    sma50 = df['Close'].rolling(50).mean().iloc[-1]
     sma200 = df['Close'].rolling(200).mean().iloc[-1]
-    
-    if close > sma200: score += 15 # 長期多頭
-    if close > sma50: score += 10  # 中期多頭
-    if is_bullish: score += 5
-    
-    # 位置加分
+    if close > sma200: score += 20
+    if is_bullish: score += 10
     if in_discount: score += 10
     if has_fvg: score += 10
-    
-    # 動能加分 (簡單 RSI 模擬)
-    delta = df['Close'].diff()
-    gain = (delta.where(delta > 0, 0)).rolling(14).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(14).mean()
-    rs = gain / loss
-    rsi = 100 - (100 / (1 + rs)).iloc[-1]
-    
-    if 40 < rsi < 65: score += 5 # 健康回調區間
-    
-    return min(score, 95) # 上限 95
+    return min(score, 99)
 
-# --- 5. 繪圖核心 (增強版) ---
+# --- 5. 繪圖核心 ---
 def generate_chart(df, ticker, title, entry, sl, tp, fvg_list, is_wait):
     try:
         plt.close('all')
-        plot_df = df.tail(50) # 只畫最後 50 根
+        plot_df = df.tail(50)
         if len(plot_df) < 10: return None
         
-        # 確保數值
         entry = entry if not np.isnan(entry) else plot_df['Close'].iloc[-1]
         sl = sl if not np.isnan(sl) else plot_df['Low'].min()
         tp = tp if not np.isnan(tp) else plot_df['High'].max()
-        
-        # 風格設定
+        eq = (plot_df['High'].max() + plot_df['Low'].min()) / 2
+
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
         s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#1e293b', facecolor='#0f172a')
         
-        # 1. 繪製 K 線
         fig, axlist = mpf.plot(plot_df, type='candle', style=s, volume=False,
             title=dict(title=f"{ticker} - {title}", color='white', size=10),
             figsize=(5, 3), returnfig=True)
@@ -148,37 +117,28 @@ def generate_chart(df, ticker, title, entry, sl, tp, fvg_list, is_wait):
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # 2. 繪製 FVG 矩形 (最重要的新功能)
-        # mplfinance 的 X 軸是 0 到 len(df)，我們需要轉換 index
+        # 繪製 FVG
         for fvg in fvg_list:
-            # 確保 FVG 索引在當前繪圖範圍內
-            # 我們畫的是 tail(50)，所以原始 df 的 index 要轉換為 0-49
             plot_idx_start = len(df) - 50
             rel_idx = fvg['idx'] - plot_idx_start
-            
             if 0 <= rel_idx < 50:
                 color = '#10b981' if fvg['type'] == 'bull' else '#ef4444'
-                # 畫出延伸到右邊的矩形
                 rect = patches.Rectangle((rel_idx, fvg['bot']), x_max - rel_idx, fvg['top'] - fvg['bot'],
-                                         linewidth=0, facecolor=color, alpha=0.25)
+                                         linewidth=0, facecolor=color, alpha=0.3)
                 ax.add_patch(rect)
 
-        # 3. 繪製 Entry/SL/TP 線與背景色 (RR 可視化)
+        # 繪製線條與區域
         if not is_wait:
-            # 獲利區間 (綠色背景)
             rect_profit = patches.Rectangle((x_min, entry), x_max-x_min, tp-entry, linewidth=0, facecolor='#10b981', alpha=0.1)
             ax.add_patch(rect_profit)
-            # 虧損區間 (紅色背景)
             rect_loss = patches.Rectangle((x_min, sl), x_max-x_min, entry-sl, linewidth=0, facecolor='#ef4444', alpha=0.1)
             ax.add_patch(rect_loss)
 
-        # 畫線
         line_style = ':' if is_wait else '-'
         ax.axhline(tp, color='#10b981', linestyle=line_style, linewidth=1)
         ax.axhline(entry, color='#3b82f6', linestyle=line_style, linewidth=1)
         ax.axhline(sl, color='#ef4444', linestyle=line_style, linewidth=1)
 
-        # 文字標籤
         ax.text(x_min, tp, f" TP: {tp:.2f}", color='#10b981', fontsize=7, va='bottom', fontweight='bold')
         ax.text(x_min, entry, f" ENTRY: {entry:.2f}", color='#3b82f6', fontsize=7, va='bottom', fontweight='bold')
         ax.text(x_min, sl, f" SL: {sl:.2f}", color='#ef4444', fontsize=7, va='top', fontweight='bold')
@@ -191,37 +151,62 @@ def generate_chart(df, ticker, title, entry, sl, tp, fvg_list, is_wait):
         print(f"Chart Error {ticker}: {e}")
         return None
 
-# --- 6. 處理邏輯 ---
-def process_ticker(t, app_data_dict, data_d, data_h):
+# --- 6. 核心處理 (含數據補救機制) ---
+def process_ticker_robust(t, app_data_dict, batch_data_d, batch_data_h):
     try:
-        # 提取
-        try:
-            df_d = data_d if isinstance(data_d, pd.DataFrame) else data_d[t]
-            df_h = data_h if isinstance(data_h, pd.DataFrame) else data_h[t]
-        except: return None
+        # 1. 嘗試從批量數據獲取
+        df_d = None
+        df_h = None
         
-        df_d = df_d.dropna()
-        df_h = df_h.dropna()
-        if len(df_d) < 50: return None
+        try:
+            # 檢查批量數據是否存在
+            if batch_data_d is not None and not batch_data_d.empty:
+                # yfinance MultiIndex 處理
+                if isinstance(batch_data_d.columns, pd.MultiIndex):
+                    df_d = batch_data_d[t].dropna()
+                else:
+                    # 單一股票的情況
+                    df_d = batch_data_d.dropna()
+            
+            if batch_data_h is not None and not batch_data_h.empty:
+                if isinstance(batch_data_h.columns, pd.MultiIndex):
+                    df_h = batch_data_h[t].dropna()
+                else:
+                    df_h = batch_data_h.dropna()
+        except:
+            pass # 提取失敗，準備進入補救措施
 
+        # 2. 補救措施：如果批量獲取失敗，單獨下載
+        if df_d is None or len(df_d) < 50:
+            print(f"⚠️ Re-downloading {t} individually...")
+            df_d = yf.download(t, period="1y", interval="1d", progress=False)
+            df_h = yf.download(t, period="1mo", interval="1h", progress=False)
+        
+        # 3. 再次檢查數據
+        if df_d is None or len(df_d) < 20: 
+            print(f"❌ Skipping {t}: No Data Found")
+            return None
+
+        # 4. 開始分析
         curr = float(df_d['Close'].iloc[-1])
         sma200 = float(df_d['Close'].rolling(200).mean().iloc[-1])
         if pd.isna(sma200): sma200 = curr
 
-        # SMC 計算 (含 FVG)
         bsl, ssl, eq, entry, sl, found_fvg, fvg_list_d = calculate_smc_details(df_d)
-        _, _, _, _, _, _, fvg_list_h = calculate_smc_details(df_h) # 也要算小時線的 FVG
-        tp = bsl
+        
+        # 小時線處理
+        if df_h is not None and not df_h.empty:
+            _, _, _, _, _, _, fvg_list_h = calculate_smc_details(df_h)
+        else:
+            df_h = df_d # 沒有小時線就用日線頂替
+            fvg_list_h = []
 
-        # 訊號
+        tp = bsl
         is_bullish = curr > sma200
         in_discount = curr < eq
         signal = "LONG" if (is_bullish and in_discount and found_fvg) else "WAIT"
-        
-        # 分數計算
         win_score = calculate_win_score(df_d, is_bullish, in_discount, found_fvg)
         
-        # 繪圖
         is_wait = (signal == "WAIT")
         img_d = generate_chart(df_d, t, "Daily SMC", entry, sl, tp, fvg_list_d, is_wait)
         img_h = generate_chart(df_h, t, "Hourly Entry", entry, sl, tp, fvg_list_h, is_wait)
@@ -229,75 +214,49 @@ def process_ticker(t, app_data_dict, data_d, data_h):
         if not img_d: img_d = ""
         if not img_h: img_h = ""
 
-        # AI 文案
+        # 文案
         cls = "b-long" if signal == "LONG" else "b-wait"
         risk = entry - sl
         reward = tp - entry
         rr = reward / risk if risk > 0 else 0
-        
-        # 顏色設定
         score_color = "#10b981" if win_score >= 70 else "#fbbf24"
         
         if signal == "LONG":
-            ai_html = f"""
-            <div class='deploy-box long'>
-                <div class='deploy-title'>✅ LONG SETUP (做多建議)</div>
-                <div style="display:flex; justify-content:space-between; margin-bottom:10px; border-bottom:1px solid #333; padding-bottom:5px;">
-                    <span>🏆 勝率評分: <b style="color:{score_color}">{win_score}</b>/100</span>
-                    <span>💰 盈虧比: <b style="color:#10b981">{rr:.2f}R</b></span>
-                </div>
-                <ul class='deploy-list'>
-                    <li><b>🎯 目標 (TP):</b> ${tp:.2f} (BSL)</li>
-                    <li><b>🔵 入場 (Entry):</b> ${entry:.2f} (FVG)</li>
-                    <li><b>🛑 止損 (SL):</b> ${sl:.2f}</li>
-                </ul>
-                <div style='margin-top:10px; font-size:0.85rem; line-height:1.4;'>
-                    <b>SMC 分析:</b> 股價回調至折價區，並在支撐位出現機構 FVG 缺口 (圖中綠色區塊)，具備高勝率反轉條件。
-                </div>
-            </div>"""
+            ai_html = f"<div class='deploy-box long'><div class='deploy-title'>✅ LONG SETUP</div><div style='display:flex;justify-content:space-between;border-bottom:1px solid #333;padding-bottom:5px'><span>🏆 評分: <b style='color:{score_color}'>{win_score}</b></span><span>💰 RR: <b style='color:#10b981'>{rr:.2f}R</b></span></div><ul class='deploy-list'><li>TP: ${tp:.2f}</li><li>Entry: ${entry:.2f}</li><li>SL: ${sl:.2f}</li></ul></div>"
         else:
             reason = "無FVG" if not found_fvg else ("逆勢" if not is_bullish else "溢價區")
-            ai_html = f"""
-            <div class='deploy-box wait'>
-                <div class='deploy-title'>⏳ WAIT (觀望)</div>
-                <div style="margin-bottom:10px; border-bottom:1px solid #333; padding-bottom:5px;">
-                    <span>趨勢評分: <b style="color:#94a3b8">{win_score}</b>/100</span>
-                </div>
-                <ul class='deploy-list'>
-                    <li><b>目前狀態:</b> {reason}</li>
-                    <li><b>參考入場:</b> ${entry:.2f}</li>
-                </ul>
-                <div style='margin-top:10px; font-size:0.85rem; color:#aaa'>
-                    圖中綠色/紅色區塊為 FVG 缺口。目前條件未滿足，請耐心等待。
-                </div>
-            </div>"""
+            ai_html = f"<div class='deploy-box wait'><div class='deploy-title'>⏳ WAIT</div><div>評分: <b style='color:#94a3b8'>{win_score}</b></div><ul class='deploy-list'><li>狀態: {reason}</li><li>參考入場: ${entry:.2f}</li></ul></div>"
             
         app_data_dict[t] = {"signal": signal, "deploy": ai_html, "img_d": img_d, "img_h": img_h}
         return {"ticker": t, "price": curr, "signal": signal, "cls": cls}
+        
     except Exception as e:
-        print(f"Err {t}: {e}")
+        print(f"Error processing {t}: {e}")
         return None
 
 # --- 7. 主程式 ---
 def main():
-    print("🚀 Starting SMC Visual Pro...")
-    
+    print("🚀 Starting Robust Analysis...")
     weekly_news_html = get_polygon_news()
 
-    print("📊 Downloading Data...")
+    # 批量下載 (加速用)
+    print("📊 Batch Downloading Data...")
     try:
-        data_d = yf.download(ALL_TICKERS, period="1y", interval="1d", group_by='ticker', progress=False)
-        data_h = yf.download(ALL_TICKERS, period="1mo", interval="1h", group_by='ticker', progress=False)
-    except: return
+        batch_d = yf.download(ALL_TICKERS, period="1y", interval="1d", group_by='ticker', progress=False)
+        batch_h = yf.download(ALL_TICKERS, period="1mo", interval="1h", group_by='ticker', progress=False)
+    except:
+        print("⚠️ Batch download failed, will fallback to individual.")
+        batch_d, batch_h = None, None
 
     APP_DATA, sector_html_blocks, screener_rows = {}, "", ""
     
     for sector, tickers in SECTORS.items():
         cards = ""
         for t in tickers:
-            res = process_ticker(t, APP_DATA, data_d, data_h)
+            # 呼叫增強版處理函式
+            res = process_ticker_robust(t, APP_DATA, batch_d, batch_h)
             if res:
-                cards += f"<div class='card' onclick=\"openModal('{t}')\"><div class='head'><div><div class='code'>{t}</div><div class='price'>${res['price']:.2f}</div></div><span class='badge {res['cls']}'>{res['signal']}</span></div><div class='hint'>Tap for SMC Chart ↗</div></div>"
+                cards += f"<div class='card' onclick=\"openModal('{t}')\"><div class='head'><div><div class='code'>{t}</div><div class='price'>${res['price']:.2f}</div></div><span class='badge {res['cls']}'>{res['signal']}</span></div><div class='hint'>Tap for SMC ↗</div></div>"
                 if res['signal'] == "LONG":
                     screener_rows += f"<tr><td>{t}</td><td>${res['price']:.2f}</td><td class='g'>LONG</td><td><span class='badge {res['cls']}'>{res['signal']}</span></td></tr>"
         if cards: sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards}</div>"
@@ -345,18 +304,18 @@ def main():
             <div class="tab" onclick="setTab('news', this)">📰 Polygon News</div>
         </div>
         
-        <div id="overview" class="content active">{sector_html_blocks}</div>
+        <div id="overview" class="content active">{sector_html_blocks if sector_html_blocks else '<div style="text-align:center;padding:50px">載入中...如長時間無顯示請檢查 Action Log</div>'}</div>
         <div id="screener" class="content"><table><thead><tr><th>Ticker</th><th>Price</th><th>Signal</th><th>Action</th></tr></thead><tbody>{screener_rows}</tbody></table></div>
         <div id="news" class="content">{weekly_news_html}</div>
         
-        <div style="text-align:center;color:#666;margin-top:30px;font-size:0.7rem">Updated: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}</div>
+        <div class="time">Updated: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}</div>
 
         <div id="modal" class="modal" onclick="document.getElementById('modal').style.display='none'">
             <div class="m-content" onclick="event.stopPropagation()">
                 <h2 id="m-ticker" style="margin-top:0"></h2>
                 <div id="m-deploy"></div>
-                <div><b>Daily Structure (Green Box = FVG)</b><div id="chart-d"></div></div>
-                <div><b>Hourly Execution</b><div id="chart-h"></div></div>
+                <div><b>Daily SMC (Green Box=FVG)</b><div id="chart-d"></div></div>
+                <div><b>Hourly Entry</b><div id="chart-h"></div></div>
                 <button class="close-btn" onclick="document.getElementById('modal').style.display='none'">Close</button>
             </div>
         </div>
