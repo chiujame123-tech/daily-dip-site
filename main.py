@@ -1,6 +1,6 @@
 import os
 import matplotlib
-# 1. 強制設定後台繪圖，這行必須在最前面
+# 1. 設定後台繪圖 (最優先執行)
 matplotlib.use('Agg') 
 import requests
 import yfinance as yf
@@ -28,7 +28,7 @@ SECTORS = {
     "📉 指數 ETF": ["SPY", "QQQ", "IWM", "TQQQ", "SQQQ"]
 }
 
-# --- 2. 新聞 (Polygon) ---
+# --- 2. 新聞 ---
 def get_polygon_news():
     if not API_KEY: return "<div style='padding:20px'>API Key Missing</div>"
     news_html = ""
@@ -47,24 +47,18 @@ def get_polygon_news():
     except: news_html = "News Error"
     return news_html
 
-# --- 3. 數據獲取 (強制清洗 MultiIndex) ---
+# --- 3. 數據獲取 ---
 def fetch_data_safe(ticker, period, interval):
     try:
         df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
         if df is None or df.empty: return None
-
-        # 強制清洗：如果欄位是 ('Close', 'AAPL')，轉為 'Close'
+        # 清洗 MultiIndex
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
-            
-        # 檢查欄位
         required = ['Open', 'High', 'Low', 'Close']
         if not all(col in df.columns for col in required): return None
-            
         return df
-    except Exception as e:
-        print(f"Download Error {ticker}: {e}")
-        return None
+    except: return None
 
 # --- 4. 技術指標與評分 ---
 def calculate_rsi(series, period=14):
@@ -117,7 +111,7 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish):
         dist_pct = abs(close - entry) / entry
         if dist_pct < 0.01: 
             score += 20
-            reasons.append("🎯 價格位於狙擊入場區")
+            reasons.append("🎯 狙擊入場區")
         elif dist_pct < 0.03: 
             score += 10
 
@@ -134,48 +128,39 @@ def calculate_smc(df):
         eq = (bsl + ssl) / 2
         best_entry = eq
         found_fvg = False
-        fvg_list = []
         
-        # 找出 FVG
         for i in range(2, len(recent)):
-            # Bullish FVG
             if recent['Low'].iloc[i] > recent['High'].iloc[i-2]:
-                gap_top = float(recent['Low'].iloc[i])
-                gap_bot = float(recent['High'].iloc[i-2])
-                # 這裡記錄的是「相對於 recent 的索引」
-                fvg_list.append({'idx': i-1, 'top': gap_top, 'bot': gap_bot, 'type': 'bull'})
-                if gap_top < eq:
-                    best_entry = gap_top
+                fvg = float(recent['Low'].iloc[i])
+                if fvg < eq:
+                    best_entry = fvg
                     found_fvg = True
-            # Bearish FVG
-            elif recent['High'].iloc[i] < recent['Low'].iloc[i-2]:
-                gap_top = float(recent['Low'].iloc[i-2])
-                gap_bot = float(recent['High'].iloc[i])
-                fvg_list.append({'idx': i-1, 'top': gap_top, 'bot': gap_bot, 'type': 'bear'})
-
-        return bsl, ssl, eq, best_entry, ssl*0.99, found_fvg, fvg_list
+                    break
+        return bsl, ssl, eq, best_entry, ssl*0.99, found_fvg
     except:
         last = float(df['Close'].iloc[-1])
-        return last*1.05, last*0.95, last, last, last*0.94, False, []
+        return last*1.05, last*0.95, last, last, last*0.94, False
 
-# --- 6. 繪圖核心 (修復座標偏移問題) ---
-def generate_chart(df, ticker, title, entry, sl, tp, fvg_list, is_wait):
+# --- 6. 繪圖核心 (絕對座標修復版) ---
+def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
     try:
-        plt.close('all') # 清除舊圖
+        # 清除舊圖
+        plt.close('all')
         
-        # 只畫最後 60 根
-        plot_len = 60
-        plot_df = df.tail(plot_len)
-        if len(plot_df) < 10: return None
+        # 1. 準備數據 (只取最後 60 根)
+        plot_df = df.tail(60).copy()
+        if len(plot_df) < 10: return "Error: Not enough data"
         
-        # 確保數值
+        # 2. 數值安全檢查
         entry = entry if not np.isnan(entry) else plot_df['Close'].iloc[-1]
         sl = sl if not np.isnan(sl) else plot_df['Low'].min()
         tp = tp if not np.isnan(tp) else plot_df['High'].max()
 
+        # 3. 設定樣式
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
         s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#1e293b', facecolor='#0f172a')
         
+        # 4. 繪圖初始化
         fig, axlist = mpf.plot(plot_df, type='candle', style=s, volume=False,
             title=dict(title=f"{ticker} - {title}", color='white', size=10),
             figsize=(5, 3), returnfig=True)
@@ -183,65 +168,66 @@ def generate_chart(df, ticker, title, entry, sl, tp, fvg_list, is_wait):
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # --- 繪製 FVG (座標修復) ---
-        # calculate_smc 用的是 tail(50)，但這裡我們畫 tail(60)
-        # 我們需要重新計算 FVG 在這張圖上的相對位置
-        
-        # 重新在 plot_df 範圍內找 FVG，確保座標 100% 對齊
-        local_fvg = []
+        # 5. 【關鍵修正】現場重新尋找 FVG
+        # 我們只在「這 60 根 K 線」裡面找 FVG，這樣 index (0~59) 絕對對齊
+        local_fvgs = []
         for i in range(2, len(plot_df)):
+            # Bullish FVG
             if plot_df['Low'].iloc[i] > plot_df['High'].iloc[i-2]:
-                local_fvg.append({
-                    'idx': i-1, # 這是相對於這張圖的索引，可以直接畫
+                local_fvgs.append({
+                    'idx': i-1, # 正確的圖表座標
                     'top': plot_df['Low'].iloc[i], 
                     'bot': plot_df['High'].iloc[i-2], 
                     'type': 'bull'
                 })
+            # Bearish FVG
             elif plot_df['High'].iloc[i] < plot_df['Low'].iloc[i-2]:
-                local_fvg.append({
+                local_fvgs.append({
                     'idx': i-1,
                     'top': plot_df['Low'].iloc[i-2], 
                     'bot': plot_df['High'].iloc[i], 
                     'type': 'bear'
                 })
 
-        for fvg in local_fvg:
+        # 6. 畫出 FVG 方塊
+        for fvg in local_fvgs:
             color = '#10b981' if fvg['type'] == 'bull' else '#ef4444'
-            # 畫出延伸到右邊的矩形
+            # 畫一個延伸到最右邊的半透明方塊
             rect = patches.Rectangle((fvg['idx'], fvg['bot']), x_max - fvg['idx'], fvg['top'] - fvg['bot'],
                                      linewidth=0, facecolor=color, alpha=0.25)
             ax.add_patch(rect)
 
-        # --- 繪製線條 ---
+        # 7. 畫出 SMC 三線
         line_style = ':' if is_wait else '-'
         ax.axhline(tp, color='#10b981', linestyle=line_style, linewidth=1)
         ax.axhline(entry, color='#3b82f6', linestyle=line_style, linewidth=1)
         ax.axhline(sl, color='#ef4444', linestyle=line_style, linewidth=1)
         
-        # 文字
+        # 8. 標註文字
         ax.text(x_min, tp, " TP", color='#10b981', fontsize=8, va='bottom', fontweight='bold')
         ax.text(x_min, entry, " ENTRY", color='#3b82f6', fontsize=8, va='bottom', fontweight='bold')
         ax.text(x_min, sl, " SL", color='#ef4444', fontsize=8, va='top', fontweight='bold')
 
-        # 盈虧區間
+        # 9. 盈虧背景色
         if not is_wait:
             rect_profit = patches.Rectangle((x_min, entry), x_max-x_min, tp-entry, linewidth=0, facecolor='#10b981', alpha=0.1)
             ax.add_patch(rect_profit)
             rect_loss = patches.Rectangle((x_min, sl), x_max-x_min, entry-sl, linewidth=0, facecolor='#ef4444', alpha=0.1)
             ax.add_patch(rect_loss)
 
+        # 10. 存檔
         buf = BytesIO()
         fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=80)
         plt.close(fig)
         return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+        
     except Exception as e:
-        print(f"Chart fail {ticker}: {e}")
-        return None
+        return f"Plot Error: {str(e)}"
 
 # --- 7. 單一股票處理 ---
 def process_ticker(t, app_data_dict):
     try:
-        time.sleep(0.3)
+        time.sleep(0.5)
         
         # 1. 下載
         df_d = fetch_data_safe(t, "1y", "1d")
@@ -255,7 +241,7 @@ def process_ticker(t, app_data_dict):
         if pd.isna(sma200): sma200 = curr
 
         # 2. SMC
-        bsl, ssl, eq, entry, sl, found_fvg, _ = calculate_smc(df_d)
+        bsl, ssl, eq, entry, sl, found_fvg = calculate_smc(df_d)
         tp = bsl
 
         # 3. 訊號
@@ -266,13 +252,14 @@ def process_ticker(t, app_data_dict):
         # 4. 評分
         score, reasons = calculate_quality_score(df_d, entry, sl, tp, is_bullish)
         
-        # 5. 繪圖 (FVG list 會在 generate_chart 內部重新計算以確保對齊)
+        # 5. 繪圖
         is_wait = (signal == "WAIT")
-        img_d = generate_chart(df_d, t, "Daily SMC", entry, sl, tp, [], is_wait)
-        img_h = generate_chart(df_h, t, "Hourly Entry", entry, sl, tp, [], is_wait)
+        img_d = generate_chart(df_d, t, "Daily SMC", entry, sl, tp, is_wait)
+        img_h = generate_chart(df_h, t, "Hourly Entry", entry, sl, tp, is_wait)
         
-        img_d = img_d if img_d else ""
-        img_h = img_h if img_h else ""
+        # 如果不是圖片格式 (是錯誤訊息文字)，則不顯示圖片
+        if img_d and not img_d.startswith("data:"): img_d = ""
+        if img_h and not img_h.startswith("data:"): img_h = ""
 
         # 6. 文案
         cls = "b-long" if signal == "LONG" else "b-wait"
@@ -281,7 +268,7 @@ def process_ticker(t, app_data_dict):
         rr = reward / risk if risk > 0 else 0
         score_color = "#10b981" if score >= 90 else ("#3b82f6" if score >= 80 else "#fbbf24")
         
-        # 90分詳解
+        # 90分詳解 (保留功能)
         elite_html = ""
         if score >= 90:
             reasons_html = "".join([f"<li>✅ {r}</li>" for r in reasons])
@@ -319,7 +306,7 @@ def process_ticker(t, app_data_dict):
 
 # --- 8. 主程式 ---
 def main():
-    print("🚀 Starting Analysis (Visual Fixed)...")
+    print("🚀 Starting Analysis (Absolute Coordinates)...")
     weekly_news_html = get_polygon_news()
     
     APP_DATA, sector_html_blocks, screener_rows_list = {}, "", []
@@ -421,8 +408,10 @@ def main():
             document.getElementById('modal').style.display = 'flex';
             document.getElementById('m-ticker').innerText = ticker;
             document.getElementById('m-deploy').innerHTML = data.deploy;
-            document.getElementById('chart-d').innerHTML = data.img_d ? '<img src="'+data.img_d+'">' : 'No Data';
-            document.getElementById('chart-h').innerHTML = data.img_h ? '<img src="'+data.img_h+'">' : 'No Data';
+            
+            // 如果後端回傳了圖片數據，就顯示圖片；否則顯示錯誤訊息
+            document.getElementById('chart-d').innerHTML = data.img_d ? '<img src="'+data.img_d+'">' : '<div style="padding:20px;text-align:center;color:#666">圖表生成失敗</div>';
+            document.getElementById('chart-h').innerHTML = data.img_h ? '<img src="'+data.img_h+'">' : '<div style="padding:20px;text-align:center;color:#666">圖表生成失敗</div>';
         }}
         </script>
     </body></html>
