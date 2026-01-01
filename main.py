@@ -1,6 +1,6 @@
 import os
 import matplotlib
-# 1. 強制設定後台繪圖 (最優先執行)
+# 1. 設定後台繪圖 (最優先執行)
 matplotlib.use('Agg') 
 import requests
 import yfinance as yf
@@ -49,51 +49,47 @@ def get_polygon_news():
 
 # --- 3. 市場大盤分析 (Market Filter) ---
 def get_market_condition():
-    """分析 SPY 和 QQQ 的趨勢，決定市場紅綠燈"""
     try:
-        print("🔍 Analyzing Market Sentiment (SPY/QQQ)...")
-        tickers = ["SPY", "QQQ"]
-        df = yf.download(tickers, period="6mo", interval="1d", progress=False)
+        print("🔍 Checking Market...")
+        # 這裡改用 Ticker.history 分開抓，避免批量失敗
+        spy = yf.Ticker("SPY").history(period="6mo")
+        qqq = yf.Ticker("QQQ").history(period="6mo")
         
-        # 處理 MultiIndex
-        if isinstance(df.columns, pd.MultiIndex):
-            spy_close = df['Close']['SPY']
-            qqq_close = df['Close']['QQQ']
-        else:
-            return "NEUTRAL", "數據格式錯誤", 0
+        if spy.empty or qqq.empty: return "NEUTRAL", "數據不足", 0
 
-        # 計算 SPY 50MA
-        spy_50 = spy_close.rolling(50).mean().iloc[-1]
-        spy_curr = spy_close.iloc[-1]
+        spy_50 = spy['Close'].rolling(50).mean().iloc[-1]
+        spy_curr = spy['Close'].iloc[-1]
         
-        # 計算 QQQ 50MA
-        qqq_50 = qqq_close.rolling(50).mean().iloc[-1]
-        qqq_curr = qqq_close.iloc[-1]
+        qqq_50 = qqq['Close'].rolling(50).mean().iloc[-1]
+        qqq_curr = qqq['Close'].iloc[-1]
         
         is_bullish = (spy_curr > spy_50) and (qqq_curr > qqq_50)
         is_bearish = (spy_curr < spy_50) and (qqq_curr < qqq_50)
         
-        if is_bullish:
-            return "BULLISH", "🟢 市場順風 (大盤 > 50MA)", 5 # 加分
-        elif is_bearish:
-            return "BEARISH", "🔴 市場逆風 (大盤 < 50MA)", -10 # 扣分
-        else:
-            return "NEUTRAL", "🟡 市場震盪", 0
+        if is_bullish: return "BULLISH", "🟢 市場順風 (大盤 > 50MA)", 5
+        elif is_bearish: return "BEARISH", "🔴 市場逆風 (大盤 < 50MA)", -10
+        else: return "NEUTRAL", "🟡 市場震盪", 0
             
     except Exception as e:
-        print(f"Market analysis failed: {e}")
-        return "NEUTRAL", "市場數據獲取失敗", 0
+        print(f"Market fail: {e}")
+        return "NEUTRAL", "市場數據失敗", 0
 
-# --- 4. 數據獲取 (單一股票) ---
+# --- 4. 數據獲取 (更換為 Ticker.history，更穩定) ---
 def fetch_data_safe(ticker, period, interval):
     try:
-        df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
-        if df is None or df.empty: return None
-        if isinstance(df.columns, pd.MultiIndex):
-            df.columns = df.columns.get_level_values(0)
-        required = ['Open', 'High', 'Low', 'Close', 'Volume']
-        if not all(col in df.columns for col in required): return None
-        return df
+        # 使用 Ticker 物件抓取，比 download 更穩定
+        dat = yf.Ticker(ticker).history(period=period, interval=interval)
+        
+        if dat is None or dat.empty: return None
+        
+        # 確保索引是時間格式
+        if not isinstance(dat.index, pd.DatetimeIndex):
+            dat.index = pd.to_datetime(dat.index)
+
+        # 確保欄位名稱正確
+        dat = dat.rename(columns={"Open": "Open", "High": "High", "Low": "Low", "Close": "Close", "Volume": "Volume"})
+        
+        return dat
     except: return None
 
 # --- 5. 技術指標 ---
@@ -105,20 +101,20 @@ def calculate_indicators(df):
     rs = gain / loss
     rsi = 100 - (100 / (1 + rs))
     
-    # RVOL (相對成交量)
+    # RVOL
     vol_ma = df['Volume'].rolling(10).mean()
     rvol = df['Volume'] / vol_ma
     
     return rsi, rvol
 
-# --- 6. 評分系統 (加入 RVOL 和市場因子) ---
+# --- 6. 評分系統 ---
 def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus):
     try:
-        score = 60 + market_bonus # 基礎分 + 市場加權
+        score = 60 + market_bonus
         reasons = []
         close = df['Close'].iloc[-1]
         
-        # 1. 盈虧比 (RR)
+        # RR
         risk = entry - sl
         reward = tp - entry
         rr = reward / risk if risk > 0 else 0
@@ -132,7 +128,7 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus):
             score -= 20
             reasons.append("⚠️ 盈虧比過低")
 
-        # 2. RSI (回調程度)
+        # RSI
         rsi = calculate_indicators(df)[0].iloc[-1]
         if 40 <= rsi <= 55: 
             score += 15
@@ -141,16 +137,15 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus):
             score -= 15
             reasons.append("⚠️ RSI 過熱")
 
-        # 3. RVOL (成交量確認) - 新功能
+        # RVOL
         rvol = calculate_indicators(df)[1].iloc[-1]
         if rvol > 1.5:
             score += 10
             reasons.append(f"🔥 爆量確認 (RVOL {rvol:.1f}x)")
         elif rvol > 1.1:
             score += 5
-            reasons.append("📊 量能溫和放大")
 
-        # 4. 趨勢
+        # Trend
         sma50 = df['Close'].rolling(50).mean().iloc[-1]
         sma200 = df['Close'].rolling(200).mean().iloc[-1]
         if close > sma50 > sma200: 
@@ -158,13 +153,12 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus):
             reasons.append("📈 強力多頭排列")
         if close < sma50: score -= 5
 
-        # 5. 距離
+        # Distance
         dist_pct = abs(close - entry) / entry
         if dist_pct < 0.01: 
             score += 15
             reasons.append("🎯 狙擊入場區")
 
-        # 市場理由
         if market_bonus > 0: reasons.append("🌍 大盤順風車 (+5)")
         if market_bonus < 0: reasons.append("🌪️ 逆大盤風險 (-10)")
 
@@ -194,22 +188,28 @@ def calculate_smc(df):
         last = float(df['Close'].iloc[-1])
         return last*1.05, last*0.95, last, last, last*0.94, False
 
-# --- 8. 繪圖核心 ---
+# --- 8. 繪圖核心 (圖片保險絲) ---
 def create_error_image(msg):
-    fig, ax = plt.subplots(figsize=(5, 3))
-    fig.patch.set_facecolor('#0f172a')
-    ax.set_facecolor('#0f172a')
-    ax.text(0.5, 0.5, msg, color='white', ha='center', va='center')
-    ax.axis('off')
-    buf = BytesIO()
-    fig.savefig(buf, format='png', bbox_inches='tight', facecolor='#0f172a')
-    plt.close(fig)
-    return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+    """生成一張純文字圖片，確保 src 永遠有效"""
+    try:
+        fig, ax = plt.subplots(figsize=(5, 3))
+        fig.patch.set_facecolor('#0f172a')
+        ax.set_facecolor('#0f172a')
+        ax.text(0.5, 0.5, msg, color='white', ha='center', va='center', fontsize=10)
+        ax.axis('off')
+        buf = BytesIO()
+        fig.savefig(buf, format='png', bbox_inches='tight', facecolor='#0f172a')
+        plt.close(fig)
+        buf.seek(0)
+        return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+    except:
+        return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
 
 def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
     try:
         plt.close('all')
         if df is None or len(df) < 5: return create_error_image("No Data")
+        
         plot_df = df.tail(60).copy()
         
         entry = float(entry) if not np.isnan(entry) else plot_df['Close'].iloc[-1]
@@ -226,6 +226,7 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
+        # 繪製 FVG (絕對座標)
         for i in range(2, len(plot_df)):
             idx = i - 1
             if plot_df['Low'].iloc[i] > plot_df['High'].iloc[i-2]: # Bullish
@@ -237,6 +238,7 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
                 rect = patches.Rectangle((idx, bot), x_max - idx, top - bot, linewidth=0, facecolor='#ef4444', alpha=0.25)
                 ax.add_patch(rect)
 
+        # 線條
         line_style = ':' if is_wait else '-'
         ax.axhline(tp, color='#10b981', linestyle=line_style, linewidth=1)
         ax.axhline(entry, color='#3b82f6', linestyle=line_style, linewidth=1)
@@ -249,14 +251,18 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
         buf = BytesIO()
         fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=80)
         plt.close(fig)
-        return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+        buf.seek(0)
+        b64 = base64.b64encode(buf.read()).decode('utf-8')
+        if not b64: return create_error_image("Encoding Error")
+        return f"data:image/png;base64,{b64}"
     except Exception as e:
-        return create_error_image(f"Plot Error")
+        print(f"Plot Error {ticker}: {e}")
+        return create_error_image(f"Error: {str(e)[:15]}")
 
 # --- 9. 單一股票處理 ---
 def process_ticker(t, app_data_dict, market_bonus):
     try:
-        time.sleep(0.5)
+        # 下載
         df_d = fetch_data_safe(t, "1y", "1d")
         if df_d is None or len(df_d) < 50: return None
         df_h = fetch_data_safe(t, "1mo", "1h")
@@ -273,7 +279,6 @@ def process_ticker(t, app_data_dict, market_bonus):
         in_discount = curr < eq
         signal = "LONG" if (is_bullish and in_discount and found_fvg) else "WAIT"
         
-        # 傳入市場分數
         score, reasons, rr, rvol = calculate_quality_score(df_d, entry, sl, tp, is_bullish, market_bonus)
         
         is_wait = (signal == "WAIT")
@@ -283,16 +288,15 @@ def process_ticker(t, app_data_dict, market_bonus):
         cls = "b-long" if signal == "LONG" else "b-wait"
         score_color = "#10b981" if score >= 85 else ("#3b82f6" if score >= 70 else "#fbbf24")
         
-        # 💎 85分以上詳解邏輯 (更新)
+        # 85分以上菁英詳解
         elite_html = ""
         if score >= 85:
-            reasons_html = "".join([f"<li>{r}</li>" for r in reasons])
+            reasons_html = "".join([f"<li>✅ {r}</li>" for r in reasons])
             
-            # 根據 RVOL 和市場狀況生成的動態評語
-            ai_comment = "此股表現強勁，"
-            if rvol > 1.2: ai_comment += "且今日成交量明顯放大 (有大資金)，"
-            if market_bonus > 0: ai_comment += "加上大盤順風，"
-            ai_comment += "建議優先關注。"
+            ai_comment = "此股結構完整，"
+            if rvol > 1.2: ai_comment += "且今日成交量明顯放大 (大資金進場)，"
+            if market_bonus > 0: ai_comment += "大盤處於多頭趨勢，"
+            ai_comment += "盈虧比具吸引力，建議加入觀察。"
             
             elite_html = f"""
             <div style='background:rgba(16,185,129,0.1); border:1px solid #10b981; padding:12px; border-radius:8px; margin:10px 0;'>
@@ -334,14 +338,13 @@ def process_ticker(t, app_data_dict, market_bonus):
 
 # --- 10. 主程式 ---
 def main():
-    print("🚀 Starting Analysis (Market Filter + RVOL)...")
+    print("🚀 Starting Analysis (V5.0 Stable)...")
     weekly_news_html = get_polygon_news()
     
-    # 1. 先抓大盤狀態
     market_status, market_text, market_bonus = get_market_condition()
     market_color = "#10b981" if market_status == "BULLISH" else ("#ef4444" if market_status == "BEARISH" else "#fbbf24")
     
-    print(f"🌍 Market: {market_status} ({market_bonus})")
+    print(f"🌍 Market: {market_status}")
     
     APP_DATA, sector_html_blocks, screener_rows_list = {}, "", []
     
@@ -360,7 +363,6 @@ def main():
         for res in sector_results:
             t = res['ticker']
             s_color = "#10b981" if res['score'] >= 85 else ("#3b82f6" if res['score'] >= 70 else "#fbbf24")
-            # 在卡片上也顯示 RVOL
             rvol_tag = f"<span style='font-size:0.7rem;color:#f472b6;margin-right:5px'>Vol {res['rvol']:.1f}x</span>" if res['rvol'] > 1.2 else ""
             
             cards += f"<div class='card' onclick=\"openModal('{t}')\"><div class='head'><div><div class='code'>{t}</div><div class='price'>${res['price']:.2f}</div></div><div style='text-align:right'><span class='badge {res['cls']}'>{res['signal']}</span><div style='margin-top:2px'>{rvol_tag}<span style='font-size:0.7rem;color:{s_color}'>{res['score']}</span></div></div></div></div>"
@@ -455,8 +457,8 @@ def main():
             document.getElementById('modal').style.display = 'flex';
             document.getElementById('m-ticker').innerText = ticker;
             document.getElementById('m-deploy').innerHTML = data.deploy;
-            document.getElementById('chart-d').innerHTML = data.img_d ? '<img src="'+data.img_d+'">' : 'No Data';
-            document.getElementById('chart-h').innerHTML = data.img_h ? '<img src="'+data.img_h+'">' : 'No Data';
+            document.getElementById('chart-d').innerHTML = '<img src="'+data.img_d+'">';
+            document.getElementById('chart-h').innerHTML = '<img src="'+data.img_h+'">';
         }}
         </script>
     </body></html>
