@@ -1,6 +1,6 @@
 import os
 import matplotlib
-matplotlib.use('Agg') # 1. 強制後台繪圖 (修復無圖問題)
+matplotlib.use('Agg') # 1. 強制後台繪圖 (必須在最上面)
 import requests
 import yfinance as yf
 import mplfinance as mpf
@@ -27,7 +27,7 @@ SECTORS = {
     "📉 指數 ETF": ["SPY", "QQQ", "IWM", "TQQQ", "SQQQ"]
 }
 
-# --- 2. 新聞 (Polygon) ---
+# --- 2. 新聞 ---
 def get_polygon_news():
     if not API_KEY: return "<div style='padding:20px'>API Key Missing</div>"
     news_html = ""
@@ -40,35 +40,29 @@ def get_polygon_news():
                 title = item.get('title')
                 url = item.get('article_url')
                 pub = item.get('publisher', {}).get('name', 'Unknown')
-                pub_time = item.get('published_utc', '')
-                try:
-                    dt = datetime.strptime(pub_time, "%Y-%m-%dT%H:%M:%SZ")
-                    date_str = dt.strftime('%m/%d')
-                except: date_str = ""
-                news_html += f"<div class='news-item'><div class='news-meta'>{pub} • {date_str}</div><a href='{url}' target='_blank' class='news-title'>{title}</a></div>"
+                dt = item.get('published_utc', '')[:10]
+                news_html += f"<div class='news-item'><div class='news-meta'>{pub} • {dt}</div><a href='{url}' target='_blank' class='news-title'>{title}</a></div>"
         else: news_html = "<div style='padding:20px'>暫無新聞</div>"
     except: news_html = "News Error"
     return news_html
 
-# --- 3. 數據獲取 (修復版：單隻下載 + 格式清洗) ---
+# --- 3. 數據獲取 (核心修復：強制格式化) ---
 def fetch_data_safe(ticker, period, interval):
     try:
-        # 強制下載單一股票
+        # 下載數據
         df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
         
-        # 2. 檢查是否為空
-        if df is None or df.empty:
-            return None
-            
-        # 3. 強制清洗欄位 (修復 Yahoo 最近的 MultiIndex 問題)
-        # 如果欄位是 ('Close', 'AAPL') 這種格式，轉回 'Close'
+        # 1. 檢查數據是否為空
+        if df is None or df.empty: return None
+
+        # 2. 關鍵修復：處理 MultiIndex (這就是導致沒圖的元兇)
+        # 如果欄位是 ('Close', 'AAPL')，將其轉為 'Close'
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
             
-        # 確保有需要的欄位
-        required_cols = ['Open', 'High', 'Low', 'Close']
-        if not all(col in df.columns for col in required_cols):
-            return None
+        # 3. 檢查必要欄位
+        required = ['Open', 'High', 'Low', 'Close']
+        if not all(col in df.columns for col in required): return None
             
         return df
     except Exception as e:
@@ -84,38 +78,57 @@ def calculate_rsi(series, period=14):
     return 100 - (100 / (1 + rs))
 
 def calculate_quality_score(df, entry, sl, tp, is_bullish):
+    """
+    回傳分數與具體加分理由 (Explanation List)
+    """
     try:
         score = 60
+        reasons = [] # 儲存為什麼高分的原因
         close = df['Close'].iloc[-1]
         
-        # RR
+        # RR (盈虧比)
         risk = entry - sl
         reward = tp - entry
         rr = reward / risk if risk > 0 else 0
-        if rr >= 3.0: score += 15
-        elif rr >= 2.0: score += 10
-        elif rr < 1.0: score -= 20
+        
+        if rr >= 3.0: 
+            score += 15
+            reasons.append(f"💰 盈虧比極佳 ({rr:.1f}R)")
+        elif rr >= 2.0: 
+            score += 10
+            reasons.append(f"💰 盈虧比優秀 ({rr:.1f}R)")
+        elif rr < 1.0: 
+            score -= 20
+            reasons.append("⚠️ 盈虧比過低 (<1R)")
 
-        # RSI
+        # RSI (相對強弱)
         rsi = calculate_rsi(df['Close']).iloc[-1]
-        if 40 <= rsi <= 55: score += 15
-        elif rsi > 70: score -= 15
-        elif rsi < 30: score -= 5
+        if 40 <= rsi <= 55: 
+            score += 15
+            reasons.append(f"📉 RSI 黃金回調位 ({int(rsi)})")
+        elif rsi > 70: 
+            score -= 15
+            reasons.append("⚠️ RSI 過熱")
 
-        # Trend
+        # 趨勢
         sma50 = df['Close'].rolling(50).mean().iloc[-1]
         sma200 = df['Close'].rolling(200).mean().iloc[-1]
-        if close > sma50 > sma200: score += 10
-        if close < sma50: score -= 5
+        if close > sma50 > sma200: 
+            score += 10
+            reasons.append("📈 多頭排列強勢")
+        if close < sma50: 
+            score -= 5
 
-        # Dist
+        # 距離
         dist_pct = abs(close - entry) / entry
-        if dist_pct < 0.01: score += 20
-        elif dist_pct < 0.03: score += 10
-        elif dist_pct > 0.05: score -= 10
+        if dist_pct < 0.01: 
+            score += 20
+            reasons.append("🎯 價格位於狙擊入場區")
+        elif dist_pct < 0.03: 
+            score += 10
 
-        return min(max(int(score), 0), 99)
-    except: return 50
+        return min(max(int(score), 0), 99), reasons
+    except: return 50, []
 
 # --- 5. SMC 運算 ---
 def calculate_smc(df):
@@ -127,24 +140,30 @@ def calculate_smc(df):
         eq = (bsl + ssl) / 2
         best_entry = eq
         found_fvg = False
+        fvg_list = []
         
-        for i in range(len(recent)-1, 2, -1):
+        for i in range(2, len(recent)):
             if recent['Low'].iloc[i] > recent['High'].iloc[i-2]:
-                fvg = float(recent['Low'].iloc[i])
-                if fvg < eq:
-                    best_entry = fvg
+                gap_top = float(recent['Low'].iloc[i])
+                gap_bot = float(recent['High'].iloc[i-2])
+                fvg_list.append({'idx': i-1, 'top': gap_top, 'bot': gap_bot, 'type': 'bull'})
+                if gap_top < eq:
+                    best_entry = gap_top
                     found_fvg = True
-                    break
-        
-        return bsl, ssl, eq, best_entry, ssl*0.99, found_fvg
+            elif recent['High'].iloc[i] < recent['Low'].iloc[i-2]:
+                gap_top = float(recent['Low'].iloc[i-2])
+                gap_bot = float(recent['High'].iloc[i])
+                fvg_list.append({'idx': i-1, 'top': gap_top, 'bot': gap_bot, 'type': 'bear'})
+
+        return bsl, ssl, eq, best_entry, ssl*0.99, found_fvg, fvg_list
     except:
         last = float(df['Close'].iloc[-1])
-        return last*1.05, last*0.95, last, last, last*0.94, False
+        return last*1.05, last*0.95, last, last, last*0.94, False, []
 
-# --- 6. 繪圖 (穩固版) ---
-def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
+# --- 6. 繪圖核心 ---
+def generate_chart(df, ticker, title, entry, sl, tp, fvg_list, is_wait):
     try:
-        plt.close('all') # 清理記憶體
+        plt.close('all')
         plot_df = df.tail(60)
         if len(plot_df) < 10: return None
         
@@ -155,28 +174,35 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
         s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#1e293b', facecolor='#0f172a')
         
-        line_style = ':' if is_wait else '-'
-        alpha_val = 0.6 if is_wait else 0.9
-        
-        hlines = dict(
-            hlines=[tp, entry, sl],
-            colors=['#10b981', '#3b82f6', '#ef4444'],
-            linewidths=[1, 1, 1],
-            linestyle=['-', line_style, '-'],
-            alpha=alpha_val
-        )
-        
         fig, axlist = mpf.plot(plot_df, type='candle', style=s, volume=False,
             title=dict(title=f"{ticker} - {title}", color='white', size=10),
-            hlines=hlines, figsize=(5, 3), returnfig=True)
+            figsize=(5, 3), returnfig=True)
         
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
+        # 繪製 FVG (修正索引)
+        for fvg in fvg_list:
+            plot_idx_start = len(df) - 60 # 必須跟上面的 tail(60) 一致
+            rel_idx = fvg['idx'] - plot_idx_start
+            if 0 <= rel_idx < 60:
+                color = '#10b981' if fvg['type'] == 'bull' else '#ef4444'
+                rect = patches.Rectangle((rel_idx, fvg['bot']), x_max - rel_idx, fvg['top'] - fvg['bot'],
+                                         linewidth=0, facecolor=color, alpha=0.3)
+                ax.add_patch(rect)
+
+        # 線條
+        line_style = ':' if is_wait else '-'
+        ax.axhline(tp, color='#10b981', linestyle=line_style, linewidth=1)
+        ax.axhline(entry, color='#3b82f6', linestyle=line_style, linewidth=1)
+        ax.axhline(sl, color='#ef4444', linestyle=line_style, linewidth=1)
+        
+        # 文字
         ax.text(x_min, tp, " TP", color='#10b981', fontsize=8, va='bottom', fontweight='bold')
         ax.text(x_min, entry, " ENTRY", color='#3b82f6', fontsize=8, va='bottom', fontweight='bold')
         ax.text(x_min, sl, " SL", color='#ef4444', fontsize=8, va='top', fontweight='bold')
 
+        # 盈虧區間
         if not is_wait:
             rect_profit = patches.Rectangle((x_min, entry), x_max-x_min, tp-entry, linewidth=0, facecolor='#10b981', alpha=0.1)
             ax.add_patch(rect_profit)
@@ -184,24 +210,22 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
             ax.add_patch(rect_loss)
 
         buf = BytesIO()
-        fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=70)
+        fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=80)
         plt.close(fig)
         return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
     except Exception as e:
+        print(f"Chart fail {ticker}: {e}")
         return None
 
-# --- 7. 單一股票處理 (主邏輯) ---
+# --- 7. 單一股票處理 ---
 def process_ticker(t, app_data_dict):
     try:
-        # 1. 下載數據 (單獨下載，確保穩定)
-        time.sleep(0.5) # 休息一下，避免被鎖 IP
+        time.sleep(0.5)
         df_d = fetch_data_safe(t, "1y", "1d")
-        
         if df_d is None or len(df_d) < 50: 
-            print(f"Skipping {t}: No Data")
+            print(f"Skip {t}: No data")
             return None
 
-        # 嘗試下載小時線，失敗就用日線頂替
         df_h = fetch_data_safe(t, "1mo", "1h")
         if df_h is None or df_h.empty: df_h = df_d
 
@@ -210,7 +234,8 @@ def process_ticker(t, app_data_dict):
         if pd.isna(sma200): sma200 = curr
 
         # SMC
-        bsl, ssl, eq, entry, sl, found_fvg = calculate_smc(df_d)
+        bsl, ssl, eq, entry, sl, found_fvg, fvg_list_d = calculate_smc(df_d)
+        _, _, _, _, _, _, fvg_list_h = calculate_smc(df_h)
         tp = bsl
 
         # 訊號
@@ -218,29 +243,50 @@ def process_ticker(t, app_data_dict):
         in_discount = curr < eq
         signal = "LONG" if (is_bullish and in_discount and found_fvg) else "WAIT"
         
-        # 評分
-        score = calculate_quality_score(df_d, entry, sl, tp, is_bullish)
+        # 評分與理由
+        score, reasons = calculate_quality_score(df_d, entry, sl, tp, is_bullish)
         
         # 繪圖
         is_wait = (signal == "WAIT")
-        img_d = generate_chart(df_d, t, "Daily", entry, sl, tp, is_wait)
-        img_h = generate_chart(df_h, t, "Hourly", entry, sl, tp, is_wait)
-
-        if not img_d: img_d = ""
-        if not img_h: img_h = ""
+        img_d = generate_chart(df_d, t, "Daily SMC", entry, sl, tp, fvg_list_d, is_wait)
+        img_h = generate_chart(df_h, t, "Hourly", entry, sl, tp, fvg_list_h, is_wait)
+        
+        img_d = img_d if img_d else ""
+        img_h = img_h if img_h else ""
 
         # 文案
         cls = "b-long" if signal == "LONG" else "b-wait"
         risk = entry - sl
         reward = tp - entry
         rr = reward / risk if risk > 0 else 0
-        score_color = "#10b981" if score >= 80 else ("#fbbf24" if score >= 60 else "#ef4444")
+        score_color = "#10b981" if score >= 90 else ("#3b82f6" if score >= 80 else "#fbbf24")
+        
+        reason_html = "".join([f"<li>✅ {r}</li>" for r in reasons])
         
         if signal == "LONG":
-            ai_html = f"<div class='deploy-box long'><div class='deploy-title'>✅ LONG SETUP</div><div style='display:flex;justify-content:space-between;border-bottom:1px solid #333;padding-bottom:5px;margin-bottom:5px;'><span>🏆 評分: <b style='color:{score_color};font-size:1.1em'>{score}</b></span><span>💰 RR: <b style='color:#10b981'>{rr:.1f}R</b></span></div><ul class='deploy-list'><li>TP: ${tp:.2f}</li><li>Entry: ${entry:.2f}</li><li>SL: ${sl:.2f}</li></ul></div>"
+            elite_badge = "<div style='background:#10b981;color:white;padding:2px 6px;border-radius:4px;display:inline-block;font-size:0.7rem;margin-bottom:5px;'>💎 ELITE SETUP</div>" if score >= 90 else ""
+            
+            ai_html = f"""
+            <div class='deploy-box long'>
+                <div class='deploy-title'>✅ LONG SETUP</div>
+                {elite_badge}
+                <div style='border-bottom:1px solid #333;padding-bottom:5px;margin-bottom:5px;'>
+                    <span>評分: <b style='color:{score_color};font-size:1.1em'>{score}</b></span> | 
+                    <span>RR: <b style='color:#10b981'>{rr:.1f}R</b></span>
+                </div>
+                <div style='margin-bottom:8px; font-size:0.85rem'>
+                    <b>為什麼值得入手？</b>
+                    <ul style='padding-left:15px; margin:5px 0;'>
+                        {reason_html}
+                    </ul>
+                </div>
+                <ul class='deploy-list' style='border-top:1px solid #444; padding-top:5px'>
+                    <li>TP: ${tp:.2f}</li><li>Entry: ${entry:.2f}</li><li>SL: ${sl:.2f}</li>
+                </ul>
+            </div>"""
         else:
-            reason = "無FVG" if not found_fvg else ("逆勢" if not is_bullish else "溢價區")
-            ai_html = f"<div class='deploy-box wait'><div class='deploy-title'>⏳ WAIT</div><div>評分: <b style='color:#94a3b8'>{score}</b></div><ul class='deploy-list'><li>狀態: {reason}</li><li>參考入場: ${entry:.2f}</li></ul></div>"
+            wait_reason = "無FVG" if not found_fvg else ("逆勢" if not is_bullish else "溢價區")
+            ai_html = f"<div class='deploy-box wait'><div class='deploy-title'>⏳ WAIT</div><div>評分: <b style='color:#94a3b8'>{score}</b></div><ul class='deploy-list'><li>狀態: {wait_reason}</li><li>參考入場: ${entry:.2f}</li></ul></div>"
             
         app_data_dict[t] = {"signal": signal, "deploy": ai_html, "img_d": img_d, "img_h": img_h, "score": score}
         return {"ticker": t, "price": curr, "signal": signal, "cls": cls, "score": score}
@@ -250,7 +296,7 @@ def process_ticker(t, app_data_dict):
 
 # --- 8. 主程式 ---
 def main():
-    print("🚀 Starting Analysis (Safe Mode)...")
+    print("🚀 Starting Analysis (Chart Fix + Detailed Score)...")
     weekly_news_html = get_polygon_news()
     
     APP_DATA, sector_html_blocks, screener_rows_list = {}, "", []
@@ -258,7 +304,6 @@ def main():
     for sector, tickers in SECTORS.items():
         cards = ""
         sector_results = []
-        
         for t in tickers:
             res = process_ticker(t, APP_DATA)
             if res:
@@ -270,7 +315,7 @@ def main():
         
         for res in sector_results:
             t = res['ticker']
-            s_color = "#10b981" if res['score'] >= 80 else "#fbbf24"
+            s_color = "#10b981" if res['score'] >= 90 else ("#3b82f6" if res['score'] >= 80 else "#fbbf24")
             cards += f"<div class='card' onclick=\"openModal('{t}')\"><div class='head'><div><div class='code'>{t}</div><div class='price'>${res['price']:.2f}</div></div><div style='text-align:right'><span class='badge {res['cls']}'>{res['signal']}</span><div style='font-size:0.7rem;color:{s_color};margin-top:2px'>Score: {res['score']}</div></div></div></div>"
             
         if cards: sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards}</div>"
@@ -319,11 +364,11 @@ def main():
     <body>
         <div class="tabs">
             <div class="tab active" onclick="setTab('overview', this)">📊 市場概況</div>
-            <div class="tab" onclick="setTab('screener', this)">🔍 強勢篩選 (Score)</div>
+            <div class="tab" onclick="setTab('screener', this)">🔍 強勢篩選 (LONG)</div>
             <div class="tab" onclick="setTab('news', this)">📰 News</div>
         </div>
         
-        <div id="overview" class="content active">{sector_html_blocks if sector_html_blocks else '<div style="text-align:center;padding:50px">載入中...如長時間無顯示請檢查 Action Log</div>'}</div>
+        <div id="overview" class="content active">{sector_html_blocks if sector_html_blocks else '<div style="text-align:center;padding:50px">載入中...</div>'}</div>
         <div id="screener" class="content"><table><thead><tr><th>Ticker</th><th>Price</th><th>Score</th><th>Signal</th></tr></thead><tbody>{screener_html}</tbody></table></div>
         <div id="news" class="content">{weekly_news_html}</div>
         
@@ -333,8 +378,8 @@ def main():
             <div class="m-content" onclick="event.stopPropagation()">
                 <h2 id="m-ticker" style="margin-top:0"></h2>
                 <div id="m-deploy"></div>
-                <div><b>Daily Structure</b><div id="chart-d"></div></div>
-                <div><b>Hourly Execution</b><div id="chart-h"></div></div>
+                <div><b>Daily SMC (Green Box=FVG)</b><div id="chart-d"></div></div>
+                <div><b>Hourly Entry</b><div id="chart-h"></div></div>
                 <button class="close-btn" onclick="document.getElementById('modal').style.display='none'">Close</button>
             </div>
         </div>
