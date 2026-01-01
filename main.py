@@ -1,6 +1,6 @@
 import os
 import matplotlib
-# 1. 強制設定後台繪圖 (最優先執行)
+# 1. 設定後台繪圖 (最優先執行)
 matplotlib.use('Agg') 
 import requests
 import yfinance as yf
@@ -47,12 +47,11 @@ def get_polygon_news():
     except: news_html = "News Error"
     return news_html
 
-# --- 3. 數據獲取 (強制清洗) ---
+# --- 3. 數據獲取 ---
 def fetch_data_safe(ticker, period, interval):
     try:
         df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
         if df is None or df.empty: return None
-        # 清洗 MultiIndex
         if isinstance(df.columns, pd.MultiIndex):
             df.columns = df.columns.get_level_values(0)
         required = ['Open', 'High', 'Low', 'Close']
@@ -62,11 +61,13 @@ def fetch_data_safe(ticker, period, interval):
 
 # --- 4. 技術指標與評分 ---
 def calculate_rsi(series, period=14):
-    delta = series.diff()
-    gain = (delta.where(delta > 0, 0)).rolling(period).mean()
-    loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
-    rs = gain / loss
-    return 100 - (100 / (1 + rs))
+    try:
+        delta = series.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
+        rs = gain / loss
+        return 100 - (100 / (1 + rs))
+    except: return pd.Series([50]*len(series))
 
 def calculate_quality_score(df, entry, sl, tp, is_bullish):
     try:
@@ -141,39 +142,44 @@ def calculate_smc(df):
         last = float(df['Close'].iloc[-1])
         return last*1.05, last*0.95, last, last, last*0.94, False
 
-# --- 6. 繪圖核心 (圖片救生圈版) ---
-def create_fallback_image(text="Chart Error"):
-    """當繪圖失敗時，生成一張帶有文字的圖片，防止破圖"""
+# --- 6. 繪圖核心 (絕對防禦版) ---
+def create_error_image(msg="Chart Error"):
+    """生成一張帶有錯誤訊息的 PNG 圖片，防止破圖"""
     try:
         fig, ax = plt.subplots(figsize=(5, 3))
-        ax.text(0.5, 0.5, text, ha='center', va='center', fontsize=12, color='white')
-        ax.set_facecolor('#0f172a')
         fig.patch.set_facecolor('#0f172a')
+        ax.set_facecolor('#0f172a')
+        ax.text(0.5, 0.5, msg, color='white', ha='center', va='center', fontsize=10)
         ax.axis('off')
         
         buf = BytesIO()
         fig.savefig(buf, format='png', bbox_inches='tight', facecolor='#0f172a')
         plt.close(fig)
+        buf.seek(0)
         return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
     except:
-        # 萬一連備用圖都掛了，回傳一個最小的透明像素
+        # 最後的防線：回傳一個極小的透明像素 Base64
         return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
 
 def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
     try:
         plt.close('all')
         
-        # 數據檢查
-        if df is None or len(df) < 10: 
-            return create_fallback_image("Not Enough Data")
+        # 1. 數據檢查
+        if df is None or len(df) < 5:
+            return create_error_image(f"Not Enough Data for {ticker}")
             
         plot_df = df.tail(60).copy()
         
-        # 數值安全檢查
-        entry = entry if not np.isnan(entry) else plot_df['Close'].iloc[-1]
-        sl = sl if not np.isnan(sl) else plot_df['Low'].min()
-        tp = tp if not np.isnan(tp) else plot_df['High'].max()
+        # 2. 數值安全檢查
+        try:
+            entry = float(entry) if not np.isnan(entry) else plot_df['Close'].iloc[-1]
+            sl = float(sl) if not np.isnan(sl) else plot_df['Low'].min()
+            tp = float(tp) if not np.isnan(tp) else plot_df['High'].max()
+        except:
+            return create_error_image("Price Level Error")
 
+        # 3. 繪圖
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
         s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#1e293b', facecolor='#0f172a')
         
@@ -184,19 +190,15 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # 重新計算並繪製 FVG (確保座標安全)
+        # FVG 重新計算 (確保座標對齊)
         for i in range(2, len(plot_df)):
             idx = i - 1
-            # Bullish
-            if plot_df['Low'].iloc[i] > plot_df['High'].iloc[i-2]:
-                bot = plot_df['High'].iloc[i-2]
-                top = plot_df['Low'].iloc[i]
+            if plot_df['Low'].iloc[i] > plot_df['High'].iloc[i-2]: # Bullish
+                bot, top = plot_df['High'].iloc[i-2], plot_df['Low'].iloc[i]
                 rect = patches.Rectangle((idx, bot), x_max - idx, top - bot, linewidth=0, facecolor='#10b981', alpha=0.25)
                 ax.add_patch(rect)
-            # Bearish
-            elif plot_df['High'].iloc[i] < plot_df['Low'].iloc[i-2]:
-                bot = plot_df['High'].iloc[i]
-                top = plot_df['Low'].iloc[i-2]
+            elif plot_df['High'].iloc[i] < plot_df['Low'].iloc[i-2]: # Bearish
+                bot, top = plot_df['High'].iloc[i], plot_df['Low'].iloc[i-2]
                 rect = patches.Rectangle((idx, bot), x_max - idx, top - bot, linewidth=0, facecolor='#ef4444', alpha=0.25)
                 ax.add_patch(rect)
 
@@ -210,21 +212,27 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
         ax.text(x_min, entry, " ENTRY", color='#3b82f6', fontsize=8, va='bottom', fontweight='bold')
         ax.text(x_min, sl, " SL", color='#ef4444', fontsize=8, va='top', fontweight='bold')
 
-        # 盈虧背景
         if not is_wait:
             rect_profit = patches.Rectangle((x_min, entry), x_max-x_min, tp-entry, linewidth=0, facecolor='#10b981', alpha=0.1)
             ax.add_patch(rect_profit)
             rect_loss = patches.Rectangle((x_min, sl), x_max-x_min, entry-sl, linewidth=0, facecolor='#ef4444', alpha=0.1)
             ax.add_patch(rect_loss)
 
+        # 4. 存檔與轉碼
         buf = BytesIO()
         fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=80)
         plt.close(fig)
-        return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+        buf.seek(0)
+        b64_str = base64.b64encode(buf.read()).decode('utf-8')
+        
+        # 檢查字串有效性
+        if not b64_str: return create_error_image("Encoding Error")
+        
+        return f"data:image/png;base64,{b64_str}"
         
     except Exception as e:
         print(f"Plot Error {ticker}: {e}")
-        return create_fallback_image(f"Plot Error: {str(e)[:20]}")
+        return create_error_image(f"Plot Error: {str(e)[:15]}...")
 
 # --- 7. 單一股票處理 ---
 def process_ticker(t, app_data_dict):
@@ -241,31 +249,26 @@ def process_ticker(t, app_data_dict):
         sma200 = float(df_d['Close'].rolling(200).mean().iloc[-1])
         if pd.isna(sma200): sma200 = curr
 
-        # SMC
         bsl, ssl, eq, entry, sl, found_fvg = calculate_smc(df_d)
         tp = bsl
 
-        # 訊號
         is_bullish = curr > sma200
         in_discount = curr < eq
         signal = "LONG" if (is_bullish and in_discount and found_fvg) else "WAIT"
         
-        # 評分
         score, reasons = calculate_quality_score(df_d, entry, sl, tp, is_bullish)
         
-        # 繪圖
         is_wait = (signal == "WAIT")
+        # 這裡不再允許回傳空字串，如果失敗會回傳錯誤圖片
         img_d = generate_chart(df_d, t, "Daily SMC", entry, sl, tp, is_wait)
         img_h = generate_chart(df_h, t, "Hourly Entry", entry, sl, tp, is_wait)
 
-        # 文案
         cls = "b-long" if signal == "LONG" else "b-wait"
         risk = entry - sl
         reward = tp - entry
         rr = reward / risk if risk > 0 else 0
         score_color = "#10b981" if score >= 90 else ("#3b82f6" if score >= 80 else "#fbbf24")
         
-        # 90分詳解 (恢復)
         elite_html = ""
         if score >= 90:
             reasons_html = "".join([f"<li>✅ {r}</li>" for r in reasons])
@@ -385,8 +388,10 @@ def main():
             <div class="m-content" onclick="event.stopPropagation()">
                 <h2 id="m-ticker" style="margin-top:0"></h2>
                 <div id="m-deploy"></div>
-                <div><b>Daily SMC (Green Box=FVG)</b><div id="chart-d"></div></div>
-                <div><b>Hourly Entry</b><div id="chart-h"></div></div>
+                
+                <div><b>Daily Structure</b><div id="chart-d"></div></div>
+                <div><b>Hourly Execution</b><div id="chart-h"></div></div>
+                
                 <button class="close-btn" onclick="document.getElementById('modal').style.display='none'">Close</button>
             </div>
         </div>
@@ -405,8 +410,10 @@ def main():
             document.getElementById('modal').style.display = 'flex';
             document.getElementById('m-ticker').innerText = ticker;
             document.getElementById('m-deploy').innerHTML = data.deploy;
-            document.getElementById('chart-d').innerHTML = data.img_d ? '<img src="'+data.img_d+'">' : 'No Data';
-            document.getElementById('chart-h').innerHTML = data.img_h ? '<img src="'+data.img_h+'">' : 'No Data';
+            
+            // 這裡不再進行判斷，直接放入 src，因為我們保證 img_d 一定是 valid base64
+            document.getElementById('chart-d').innerHTML = '<img src="'+data.img_d+'">';
+            document.getElementById('chart-h').innerHTML = '<img src="'+data.img_h+'">';
         }}
         </script>
     </body></html>
