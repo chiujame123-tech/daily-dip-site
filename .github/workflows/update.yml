@@ -1,17 +1,16 @@
-name: DailyDip Auto Update
+name: Build and Deploy
 
 on:
   schedule:
-    - cron: '0 * * * *' # 每小時執行
-  workflow_dispatch: # 手動執行按鈕
+    - cron: '0 */4 * * *' # 每 4 小時自動跑一次
+  workflow_dispatch:      # 允許手動點擊按鈕執行
 
 permissions:
-  contents: write
+  contents: write         # ⚠️ 這裡一定要有 write 權限
 
 jobs:
   build-and-deploy:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
@@ -19,17 +18,17 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.10'
+          python-version: '3.9'
 
-      - name: Install libraries
+      - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install requests pandas yfinance mplfinance matplotlib
 
       - name: Run Analysis Script
         env:
           POLYGON_API_KEY: ${{ secrets.POLYGON_API_KEY }}
-        run: |
-          python main.py
+        run: python main.py
 
       - name: Deploy to GitHub Pages
         uses: peaceiris/actions-gh-pages@v3
@@ -37,3 +36,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./
           publish_branch: gh-pages
+          force_orphan: true  # 🔥 關鍵：每次都強制覆蓋，防止版本衝突！
+          keep_files: true    # 保留生成的 index.html
+          user_name: 'github-actions[bot]'
+          user_email: 'github-actions[bot]@users.noreply.github.com'
