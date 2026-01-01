@@ -1,6 +1,6 @@
 import os
 import matplotlib
-matplotlib.use('Agg') # 強制後台繪圖，修復 GitHub Actions 無圖問題
+matplotlib.use('Agg') # 1. 強制後台繪圖 (修復無圖問題)
 import requests
 import yfinance as yf
 import mplfinance as mpf
@@ -26,7 +26,6 @@ SECTORS = {
     "🏦 金融與消費": ["JPM", "V", "COST", "MCD", "NKE", "LLY", "WMT", "DIS", "SBUX"],
     "📉 指數 ETF": ["SPY", "QQQ", "IWM", "TQQQ", "SQQQ"]
 }
-ALL_TICKERS = [t for sector in SECTORS.values() for t in sector]
 
 # --- 2. 新聞 (Polygon) ---
 def get_polygon_news():
@@ -51,7 +50,32 @@ def get_polygon_news():
     except: news_html = "News Error"
     return news_html
 
-# --- 3. 技術指標計算 ---
+# --- 3. 數據獲取 (修復版：單隻下載 + 格式清洗) ---
+def fetch_data_safe(ticker, period, interval):
+    try:
+        # 強制下載單一股票
+        df = yf.download(ticker, period=period, interval=interval, progress=False, auto_adjust=True)
+        
+        # 2. 檢查是否為空
+        if df is None or df.empty:
+            return None
+            
+        # 3. 強制清洗欄位 (修復 Yahoo 最近的 MultiIndex 問題)
+        # 如果欄位是 ('Close', 'AAPL') 這種格式，轉回 'Close'
+        if isinstance(df.columns, pd.MultiIndex):
+            df.columns = df.columns.get_level_values(0)
+            
+        # 確保有需要的欄位
+        required_cols = ['Open', 'High', 'Low', 'Close']
+        if not all(col in df.columns for col in required_cols):
+            return None
+            
+        return df
+    except Exception as e:
+        print(f"Download Error {ticker}: {e}")
+        return None
+
+# --- 4. 技術指標與評分 ---
 def calculate_rsi(series, period=14):
     delta = series.diff()
     gain = (delta.where(delta > 0, 0)).rolling(period).mean()
@@ -59,47 +83,39 @@ def calculate_rsi(series, period=14):
     rs = gain / loss
     return 100 - (100 / (1 + rs))
 
-# --- 4. 嚴格評分系統 (Strict Scoring) ---
 def calculate_quality_score(df, entry, sl, tp, is_bullish):
-    """
-    滿分 100，起步 60 分。
-    根據 RR、RSI、均線乖離率進行加減分，拉開分數差距。
-    """
     try:
-        score = 60 # 基礎分
+        score = 60
         close = df['Close'].iloc[-1]
         
-        # 1. 盈虧比 (RR) 權重: 30%
+        # RR
         risk = entry - sl
         reward = tp - entry
         rr = reward / risk if risk > 0 else 0
-        
-        if rr >= 3.0: score += 15    # 極佳
-        elif rr >= 2.0: score += 10  # 優秀
-        elif rr >= 1.5: score += 5   # 普通
-        elif rr < 1.0: score -= 20   # 爛賭局 (扣分)
+        if rr >= 3.0: score += 15
+        elif rr >= 2.0: score += 10
+        elif rr < 1.0: score -= 20
 
-        # 2. RSI 位置 權重: 20%
+        # RSI
         rsi = calculate_rsi(df['Close']).iloc[-1]
-        if 40 <= rsi <= 55: score += 15 # 完美回調區
-        elif rsi > 70: score -= 15      # 過熱 (扣分)
-        elif rsi < 30: score -= 5       # 過冷 (可能接刀)
+        if 40 <= rsi <= 55: score += 15
+        elif rsi > 70: score -= 15
+        elif rsi < 30: score -= 5
 
-        # 3. 趨勢強度 權重: 20%
+        # Trend
         sma50 = df['Close'].rolling(50).mean().iloc[-1]
         sma200 = df['Close'].rolling(200).mean().iloc[-1]
-        if close > sma50 > sma200: score += 10 # 多頭排列
-        if close < sma50: score -= 5 # 短期轉弱
+        if close > sma50 > sma200: score += 10
+        if close < sma50: score -= 5
 
-        # 4. 距離入場點 權重: 30% (越接近 Entry 越好)
+        # Dist
         dist_pct = abs(close - entry) / entry
-        if dist_pct < 0.01: score += 20   # 就在入場點附近 (狙擊)
-        elif dist_pct < 0.03: score += 10 # 稍微偏離
-        elif dist_pct > 0.05: score -= 10 # 已經跑掉了
+        if dist_pct < 0.01: score += 20
+        elif dist_pct < 0.03: score += 10
+        elif dist_pct > 0.05: score -= 10
 
-        return min(max(int(score), 0), 99) # 限制 0-99 分
-    except:
-        return 50
+        return min(max(int(score), 0), 99)
+    except: return 50
 
 # --- 5. SMC 運算 ---
 def calculate_smc(df):
@@ -125,16 +141,13 @@ def calculate_smc(df):
         last = float(df['Close'].iloc[-1])
         return last*1.05, last*0.95, last, last, last*0.94, False
 
-# --- 6. 繪圖核心 (修復版 - 確保出圖) ---
+# --- 6. 繪圖 (穩固版) ---
 def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
     try:
-        # 清除舊圖
-        plt.close('all')
-        
+        plt.close('all') # 清理記憶體
         plot_df = df.tail(60)
         if len(plot_df) < 10: return None
         
-        # 確保數值 (防止 NaN 崩潰)
         entry = entry if not np.isnan(entry) else plot_df['Close'].iloc[-1]
         sl = sl if not np.isnan(sl) else plot_df['Low'].min()
         tp = tp if not np.isnan(tp) else plot_df['High'].max()
@@ -142,7 +155,6 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
         s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#1e293b', facecolor='#0f172a')
         
-        # 線條樣式
         line_style = ':' if is_wait else '-'
         alpha_val = 0.6 if is_wait else 0.9
         
@@ -161,12 +173,10 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # 簡化文字標註 (防止重疊)
         ax.text(x_min, tp, " TP", color='#10b981', fontsize=8, va='bottom', fontweight='bold')
         ax.text(x_min, entry, " ENTRY", color='#3b82f6', fontsize=8, va='bottom', fontweight='bold')
         ax.text(x_min, sl, " SL", color='#ef4444', fontsize=8, va='top', fontweight='bold')
 
-        # 簡單區域 (不畫複雜 FVG 以免崩潰)
         if not is_wait:
             rect_profit = patches.Rectangle((x_min, entry), x_max-x_min, tp-entry, linewidth=0, facecolor='#10b981', alpha=0.1)
             ax.add_patch(rect_profit)
@@ -177,23 +187,23 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait):
         fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=70)
         plt.close(fig)
         return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
-        
     except Exception as e:
-        print(f"Chart Error {ticker}: {e}")
-        # 回傳一個空的 Base64 圖片 (1x1 像素) 防止前端破圖
-        return "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="
+        return None
 
-# --- 7. 處理單一股票 ---
-def process_ticker(t, app_data_dict, data_d, data_h):
+# --- 7. 單一股票處理 (主邏輯) ---
+def process_ticker(t, app_data_dict):
     try:
-        try:
-            df_d = data_d if isinstance(data_d, pd.DataFrame) else data_d[t]
-            df_h = data_h if isinstance(data_h, pd.DataFrame) else data_h[t]
-        except: return None
+        # 1. 下載數據 (單獨下載，確保穩定)
+        time.sleep(0.5) # 休息一下，避免被鎖 IP
+        df_d = fetch_data_safe(t, "1y", "1d")
         
-        df_d = df_d.dropna()
-        df_h = df_h.dropna()
-        if len(df_d) < 50: return None
+        if df_d is None or len(df_d) < 50: 
+            print(f"Skipping {t}: No Data")
+            return None
+
+        # 嘗試下載小時線，失敗就用日線頂替
+        df_h = fetch_data_safe(t, "1mo", "1h")
+        if df_h is None or df_h.empty: df_h = df_d
 
         curr = float(df_d['Close'].iloc[-1])
         sma200 = float(df_d['Close'].rolling(200).mean().iloc[-1])
@@ -208,7 +218,7 @@ def process_ticker(t, app_data_dict, data_d, data_h):
         in_discount = curr < eq
         signal = "LONG" if (is_bullish and in_discount and found_fvg) else "WAIT"
         
-        # 嚴格評分
+        # 評分
         score = calculate_quality_score(df_d, entry, sl, tp, is_bullish)
         
         # 繪圖
@@ -216,12 +226,14 @@ def process_ticker(t, app_data_dict, data_d, data_h):
         img_d = generate_chart(df_d, t, "Daily", entry, sl, tp, is_wait)
         img_h = generate_chart(df_h, t, "Hourly", entry, sl, tp, is_wait)
 
+        if not img_d: img_d = ""
+        if not img_h: img_h = ""
+
         # 文案
         cls = "b-long" if signal == "LONG" else "b-wait"
         risk = entry - sl
         reward = tp - entry
         rr = reward / risk if risk > 0 else 0
-        
         score_color = "#10b981" if score >= 80 else ("#fbbf24" if score >= 60 else "#ef4444")
         
         if signal == "LONG":
@@ -238,32 +250,22 @@ def process_ticker(t, app_data_dict, data_d, data_h):
 
 # --- 8. 主程式 ---
 def main():
-    print("🚀 Starting Analysis (Strict Score Fix)...")
-    
+    print("🚀 Starting Analysis (Safe Mode)...")
     weekly_news_html = get_polygon_news()
-
-    print("📊 Downloading Data (Yahoo)...")
-    try:
-        data_d = yf.download(ALL_TICKERS, period="1y", interval="1d", group_by='ticker', progress=False)
-        data_h = yf.download(ALL_TICKERS, period="1mo", interval="1h", group_by='ticker', progress=False)
-    except: return
-
+    
     APP_DATA, sector_html_blocks, screener_rows_list = {}, "", []
     
-    # 處理數據
     for sector, tickers in SECTORS.items():
         cards = ""
-        # 這一區塊的股票列表
         sector_results = []
         
         for t in tickers:
-            res = process_ticker(t, APP_DATA, data_d, data_h)
+            res = process_ticker(t, APP_DATA)
             if res:
                 sector_results.append(res)
                 if res['signal'] == "LONG":
                     screener_rows_list.append(res)
         
-        # 排序：分數高的排前面
         sector_results.sort(key=lambda x: x['score'], reverse=True)
         
         for res in sector_results:
@@ -273,7 +275,6 @@ def main():
             
         if cards: sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards}</div>"
 
-    # 處理 Screener 排序 (由高分到低分)
     screener_rows_list.sort(key=lambda x: x['score'], reverse=True)
     screener_html = ""
     for res in screener_rows_list:
@@ -322,7 +323,7 @@ def main():
             <div class="tab" onclick="setTab('news', this)">📰 News</div>
         </div>
         
-        <div id="overview" class="content active">{sector_html_blocks}</div>
+        <div id="overview" class="content active">{sector_html_blocks if sector_html_blocks else '<div style="text-align:center;padding:50px">載入中...如長時間無顯示請檢查 Action Log</div>'}</div>
         <div id="screener" class="content"><table><thead><tr><th>Ticker</th><th>Price</th><th>Score</th><th>Signal</th></tr></thead><tbody>{screener_html}</tbody></table></div>
         <div id="news" class="content">{weekly_news_html}</div>
         
