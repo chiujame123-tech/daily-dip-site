@@ -6,7 +6,7 @@ on:
   workflow_dispatch:      # 允許手動點擊按鈕執行
 
 permissions:
-  contents: write         # ⚠️ 這裡一定要有 write 權限
+  contents: write
 
 jobs:
   build-and-deploy:
@@ -18,7 +18,7 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.9'
+          python-version: '3.11'  # 👈 關鍵修改：改成 3.11 (或是 3.10)
 
       - name: Install dependencies
         run: |
@@ -36,7 +36,7 @@ jobs:
           github_token: ${{ secrets.GITHUB_TOKEN }}
           publish_dir: ./
           publish_branch: gh-pages
-          force_orphan: true  # 🔥 關鍵：每次都強制覆蓋，防止版本衝突！
-          keep_files: true    # 保留生成的 index.html
+          force_orphan: true
+          keep_files: true
           user_name: 'github-actions[bot]'
           user_email: 'github-actions[bot]@users.noreply.github.com'
