@@ -79,7 +79,7 @@ def fetch_data_safe(ticker, period, interval):
         return dat
     except: return None
 
-# --- 5. 技術指標 (RSI, RVOL) ---
+# --- 5. 擴充技術指標 (RSI, RVOL, Golden Cross) ---
 def calculate_indicators(df):
     # RSI
     delta = df['Close'].diff()
@@ -92,16 +92,46 @@ def calculate_indicators(df):
     vol_ma = df['Volume'].rolling(10).mean()
     rvol = df['Volume'] / vol_ma
     
-    return rsi, rvol
+    # Golden Cross (50MA > 200MA)
+    sma50 = df['Close'].rolling(50).mean()
+    sma200 = df['Close'].rolling(200).mean()
+    
+    # 檢查是否最近才交叉 (最近 3 天內 50MA 穿過 200MA)
+    golden_cross = False
+    if len(sma50) > 5:
+        curr_50 = sma50.iloc[-1]
+        curr_200 = sma200.iloc[-1]
+        prev_50 = sma50.iloc[-5] # 5天前
+        prev_200 = sma200.iloc[-5]
+        
+        if curr_50 > curr_200 and prev_50 <= prev_200:
+            golden_cross = True
+            
+    # 趨勢強度
+    trend_bullish = sma50.iloc[-1] > sma200.iloc[-1]
+    
+    # 績效 (近30天回報)
+    if len(df) > 30:
+        perf_30d = (df['Close'].iloc[-1] - df['Close'].iloc[-30]) / df['Close'].iloc[-30] * 100
+    else:
+        perf_30d = 0
+    
+    return rsi, rvol, golden_cross, trend_bullish, perf_30d
 
-# --- 6. 評分系統 (加入 Sweep 權重) ---
-def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus, found_sweep):
+# --- 6. 綜合評分系統 (融合多策略) ---
+def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus, found_sweep, indicators):
     try:
         score = 60 + market_bonus
         reasons = []
-        close = df['Close'].iloc[-1]
+        rsi, rvol, golden_cross, trend, perf_30d = indicators
         
-        # RR
+        # 1. 策略共振 (Confluence)
+        strategies = 0
+        if found_sweep: strategies += 1
+        if golden_cross: strategies += 1
+        if 40 <= rsi.iloc[-1] <= 55: strategies += 1
+        
+        # 2. RR (SMC 核心)
         risk = entry - sl
         reward = tp - entry
         rr = reward / risk if risk > 0 else 0
@@ -112,68 +142,74 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus, found_s
             score += 10
             reasons.append(f"💰 盈虧比優秀 ({rr:.1f}R)")
 
-        # RSI
-        rsi = calculate_indicators(df)[0].iloc[-1]
-        if 40 <= rsi <= 55: 
-            score += 15
-            reasons.append(f"📉 RSI 完美回調 ({int(rsi)})")
-        elif rsi > 70: score -= 15
-
-        # RVOL
-        rvol = calculate_indicators(df)[1].iloc[-1]
-        if rvol > 1.5:
+        # 3. RSI
+        curr_rsi = rsi.iloc[-1]
+        if 40 <= curr_rsi <= 55: 
             score += 10
-            reasons.append(f"🔥 爆量確認 (RVOL {rvol:.1f}x)")
-        elif rvol > 1.1: score += 5
+            reasons.append(f"📉 RSI 完美回調 ({int(curr_rsi)})")
+        elif curr_rsi > 70: score -= 15
 
-        # Sweep (獵殺) - 重點加分
+        # 4. RVOL (成交量確認)
+        curr_rvol = rvol.iloc[-1]
+        if curr_rvol > 1.5:
+            score += 10
+            reasons.append(f"🔥 爆量確認 (RVOL {curr_rvol:.1f}x)")
+        elif curr_rvol > 1.1: score += 5
+
+        # 5. Sweep (獵殺)
         if found_sweep:
             score += 15
             reasons.append("💧 觸發流動性獵殺 (Turtle Soup)")
-
-        # Trend
-        sma50 = df['Close'].rolling(50).mean().iloc[-1]
-        sma200 = df['Close'].rolling(200).mean().iloc[-1]
-        if close > sma50 > sma200: 
+            
+        # 6. Golden Cross (新策略)
+        if golden_cross:
             score += 10
-            reasons.append("📈 強力多頭排列")
+            reasons.append("✨ 出現黃金交叉 (50MA 穿過 200MA)")
+
+        # 7. 距離與趨勢
+        close = df['Close'].iloc[-1]
+        dist_pct = abs(close - entry) / entry
+        if dist_pct < 0.01: 
+            score += 15
+            reasons.append("🎯 狙擊入場區")
+            
+        if trend: 
+            score += 5
+            reasons.append("📈 長期趨勢向上")
 
         if market_bonus > 0: reasons.append("🌍 大盤順風車 (+5)")
         if market_bonus < 0: reasons.append("🌪️ 逆大盤風險 (-10)")
 
-        return min(max(int(score), 0), 99), reasons, rr, rvol
-    except: return 50, [], 0, 0
+        return min(max(int(score), 0), 99), reasons, rr, rvol.iloc[-1], perf_30d, strategies
+    except: return 50, [], 0, 0, 0, 0
 
-# --- 7. SMC 運算 (加入 Sweep 偵測) ---
+# --- 7. SMC 運算 ---
 def calculate_smc(df):
     try:
         window = 50
         recent = df.tail(window)
         bsl = float(recent['High'].max())
-        ssl = float(recent['Low'].min()) # 50天低點 (止損獵殺位)
+        ssl = float(recent['Low'].min())
         eq = (bsl + ssl) / 2
         
         best_entry = eq
         found_fvg = False
-        found_sweep = False # 新增：獵殺偵測
+        found_sweep = False
         
-        # 1. 偵測 Sweep (獵殺)：最近 3 根 K 線，是否有 Low 跌破 SSL 但 Close 收回 SSL 之上
+        # Sweep
         last_3 = recent.tail(3)
         for i in range(len(last_3)):
             candle = last_3.iloc[i]
-            # 這裡的 SSL 應該用更早之前的低點，為了簡化，我們檢測是否跌破了區間低點並拉回
-            # 嚴謹的 Sweep：最低價 < SSL 且 收盤價 > SSL
             if candle['Low'] < ssl and candle['Close'] > ssl:
                 found_sweep = True
-                best_entry = ssl # 如果發生獵殺，最好的入場點就是獵殺位
+                best_entry = ssl
         
-        # 2. 偵測 FVG
+        # FVG
         for i in range(2, len(recent)):
             if recent['Low'].iloc[i] > recent['High'].iloc[i-2]:
                 fvg = float(recent['Low'].iloc[i])
                 if fvg < eq:
-                    if not found_sweep: # 如果沒獵殺，優先用 FVG 入場
-                        best_entry = fvg
+                    if not found_sweep: best_entry = fvg
                     found_fvg = True
                     break
                     
@@ -215,7 +251,6 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, found_sweep):
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # FVG 繪製
         for i in range(2, len(plot_df)):
             idx = i - 1
             if plot_df['Low'].iloc[i] > plot_df['High'].iloc[i-2]: # Bullish
@@ -227,14 +262,9 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, found_sweep):
                 rect = patches.Rectangle((idx, bot), x_max - idx, top - bot, linewidth=0, facecolor='#ef4444', alpha=0.25)
                 ax.add_patch(rect)
 
-        # 標記 Sweep (如果有的話)
         if found_sweep:
-            # 找到圖中最低點的位置標記
-            lowest_idx = plot_df['Low'].idxmin()
-            # 這裡簡單標記在 SL 附近
             ax.text(x_min, sl*0.995, "💧 SWEEP", color='#fbbf24', fontsize=9, fontweight='bold', va='top')
 
-        # 線條
         line_style = ':' if is_wait else '-'
         ax.axhline(tp, color='#10b981', linestyle=line_style, linewidth=1)
         ax.axhline(entry, color='#3b82f6', linestyle=line_style, linewidth=1)
@@ -252,16 +282,13 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, found_sweep):
         fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=80)
         plt.close(fig)
         buf.seek(0)
-        b64 = base64.b64encode(buf.read()).decode('utf-8')
-        if not b64: return create_error_image("Encoding Error")
-        return f"data:image/png;base64,{b64}"
-    except Exception as e:
-        return create_error_image("Plot Error")
+        return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
+    except: return create_error_image("Plot Error")
 
 # --- 9. 單一股票處理 ---
 def process_ticker(t, app_data_dict, market_bonus):
     try:
-        time.sleep(0.3) # Rate limit protection
+        time.sleep(0.3)
         df_d = fetch_data_safe(t, "1y", "1d")
         if df_d is None or len(df_d) < 50: return None
         df_h = fetch_data_safe(t, "1mo", "1h")
@@ -271,16 +298,18 @@ def process_ticker(t, app_data_dict, market_bonus):
         sma200 = float(df_d['Close'].rolling(200).mean().iloc[-1])
         if pd.isna(sma200): sma200 = curr
 
-        # SMC + Sweep
         bsl, ssl, eq, entry, sl, found_fvg, found_sweep = calculate_smc(df_d)
         tp = bsl
 
         is_bullish = curr > sma200
         in_discount = curr < eq
-        # 如果有 Sweep 也是強烈訊號
         signal = "LONG" if (is_bullish and in_discount and (found_fvg or found_sweep)) else "WAIT"
         
-        score, reasons, rr, rvol = calculate_quality_score(df_d, entry, sl, tp, is_bullish, market_bonus, found_sweep)
+        # 計算指標
+        indicators = calculate_indicators(df_d)
+        
+        # 評分 (傳入新指標)
+        score, reasons, rr, rvol, perf_30d, strategies = calculate_quality_score(df_d, entry, sl, tp, is_bullish, market_bonus, found_sweep, indicators)
         
         is_wait = (signal == "WAIT")
         img_d = generate_chart(df_d, t, "Daily SMC", entry, sl, tp, is_wait, found_sweep)
@@ -289,15 +318,20 @@ def process_ticker(t, app_data_dict, market_bonus):
         cls = "b-long" if signal == "LONG" else "b-wait"
         score_color = "#10b981" if score >= 85 else ("#3b82f6" if score >= 70 else "#fbbf24")
         
-        # 💎 菁英詳解 (Score >= 85)
+        # 菁英詳解 (Score >= 85) - AI Trader 風格
         elite_html = ""
         if score >= 85:
             reasons_html = "".join([f"<li>✅ {r}</li>" for r in reasons])
             
-            # 這裡加入您指定的「流動性獵殺」文字
-            special_note = ""
+            # 策略共振文字
+            confluence_text = ""
+            if strategies >= 2:
+                confluence_text = f"🔥 <b>策略共振：</b> 此股同時觸發了 {strategies} 種不同的多頭訊號 (SMC/RSI/Golden Cross)，可靠度極高。"
+            
+            # 獵殺文字 (您指定的要求)
+            sweep_text = ""
             if found_sweep:
-                special_note = """
+                sweep_text = """
                 <div style='margin-top:8px; padding:8px; background:rgba(251,191,36,0.1); border-left:3px solid #fbbf24; color:#fcd34d; font-size:0.85rem;'>
                     <b>⚠️ 偵測到流動性獵殺 (Sweep) + FVG：</b><br>
                     這是勝率最高的翻轉訊號。<br>
@@ -308,10 +342,9 @@ def process_ticker(t, app_data_dict, market_bonus):
             elite_html = f"""
             <div style='background:rgba(16,185,129,0.1); border:1px solid #10b981; padding:12px; border-radius:8px; margin:10px 0;'>
                 <div style='font-weight:bold; color:#10b981; margin-bottom:5px;'>💎 AI 戰略分析 (Score {score})</div>
-                <ul style='margin:0; padding-left:20px; font-size:0.8rem; color:#d1d5db;'>
-                    {reasons_html}
-                </ul>
-                {special_note}
+                <div style='font-size:0.85rem; color:#e2e8f0; margin-bottom:8px;'>{confluence_text}</div>
+                <ul style='margin:0; padding-left:20px; font-size:0.8rem; color:#d1d5db;'>{reasons_html}</ul>
+                {sweep_text}
             </div>
             """
         
@@ -323,6 +356,7 @@ def process_ticker(t, app_data_dict, market_bonus):
                     <span>🏆 評分: <b style='color:{score_color};font-size:1.1em'>{score}</b></span>
                     <span>💰 RR: <b style='color:#10b981'>{rr:.1f}R</b></span>
                 </div>
+                <div style='font-size:0.8rem; color:#94a3b8; margin-bottom:5px;'>📈 近30日績效: {perf_30d:+.1f}%</div>
                 {elite_html}
                 <ul class='deploy-list' style='margin-top:10px'>
                     <li>TP: ${tp:.2f}</li><li>Entry: ${entry:.2f}</li><li>SL: ${sl:.2f}</li>
@@ -333,19 +367,18 @@ def process_ticker(t, app_data_dict, market_bonus):
             ai_html = f"<div class='deploy-box wait'><div class='deploy-title'>⏳ WAIT</div><div>評分: <b style='color:#94a3b8'>{score}</b></div><ul class='deploy-list'><li>狀態: {reason}</li><li>參考入場: ${entry:.2f}</li></ul></div>"
             
         app_data_dict[t] = {"signal": signal, "deploy": ai_html, "img_d": img_d, "img_h": img_h, "score": score}
-        return {"ticker": t, "price": curr, "signal": signal, "cls": cls, "score": score, "rvol": rvol}
+        return {"ticker": t, "price": curr, "signal": signal, "cls": cls, "score": score, "rvol": rvol, "perf": perf_30d}
     except Exception as e:
         print(f"Err {t}: {e}")
         return None
 
 # --- 10. 主程式 ---
 def main():
-    print("🚀 Starting Analysis (Sweep + RVOL + Market Filter)...")
+    print("🚀 Starting Analysis (AI-Trader Features)...")
     weekly_news_html = get_polygon_news()
     
     market_status, market_text, market_bonus = get_market_condition()
     market_color = "#10b981" if market_status == "BULLISH" else ("#ef4444" if market_status == "BEARISH" else "#fbbf24")
-    print(f"🌍 Market: {market_status}")
     
     APP_DATA, sector_html_blocks, screener_rows_list = {}, "", []
     
@@ -365,8 +398,9 @@ def main():
             t = res['ticker']
             s_color = "#10b981" if res['score'] >= 85 else ("#3b82f6" if res['score'] >= 70 else "#fbbf24")
             rvol_tag = f"<span style='font-size:0.7rem;color:#f472b6;margin-right:5px'>Vol {res['rvol']:.1f}x</span>" if res['rvol'] > 1.2 else ""
+            perf_tag = f"<span style='font-size:0.7rem;color:#94a3b8'>30d:{res['perf']:+.0f}%</span>"
             
-            cards += f"<div class='card' onclick=\"openModal('{t}')\"><div class='head'><div><div class='code'>{t}</div><div class='price'>${res['price']:.2f}</div></div><div style='text-align:right'><span class='badge {res['cls']}'>{res['signal']}</span><div style='margin-top:2px'>{rvol_tag}<span style='font-size:0.7rem;color:{s_color}'>{res['score']}</span></div></div></div></div>"
+            cards += f"<div class='card' onclick=\"openModal('{t}')\"><div class='head'><div><div class='code'>{t}</div><div class='price'>${res['price']:.2f}</div></div><div style='text-align:right'><span class='badge {res['cls']}'>{res['signal']}</span><div style='margin-top:2px'>{rvol_tag}<span style='font-size:0.7rem;color:{s_color}'>{res['score']}</span></div>{perf_tag}</div></div></div></div>"
             
         if cards: sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards}</div>"
 
@@ -438,7 +472,7 @@ def main():
             <div class="m-content" onclick="event.stopPropagation()">
                 <h2 id="m-ticker" style="margin-top:0"></h2>
                 <div id="m-deploy"></div>
-                <div><b>Daily SMC</b><div id="chart-d"></div></div>
+                <div><b>Daily SMC (Green Box=FVG)</b><div id="chart-d"></div></div>
                 <div><b>Hourly Entry</b><div id="chart-h"></div></div>
                 <button class="close-btn" onclick="document.getElementById('modal').style.display='none'">Close</button>
             </div>
