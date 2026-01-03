@@ -159,6 +159,7 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus, found_s
         if market_bonus > 0: reasons.append("🌍 大盤順風車 (+5)")
         if market_bonus < 0: reasons.append("🌪️ 逆大盤風險 (-10)")
 
+        # 注意：這裡已經回傳了 rvol.iloc[-1] (這是一個 float 數字)
         return min(max(int(score), 0), 99), reasons, rr, rvol.iloc[-1], perf_30d, strategies
     except: return 50, [], 0, 0, 0, 0
 
@@ -284,8 +285,14 @@ def process_ticker(t, app_data_dict, market_bonus):
         signal = "LONG" if (is_bullish and in_discount and (found_fvg or found_sweep)) else "WAIT"
         
         indicators = calculate_indicators(df_d)
-        score, reasons, rr, rvol, perf_30d, strategies = calculate_quality_score(df_d, entry, sl, tp, is_bullish, market_bonus, found_sweep, indicators)
-        rvol_val = rvol.iloc[-1]
+        
+        # 🔥🔥🔥 修復重點在此：
+        # calculate_quality_score 回傳的第四個變數，已經是 rvol 數值 (float)
+        # 所以變數名稱直接叫 rvol_val，不要再叫 rvol，避免混淆
+        score, reasons, rr, rvol_val, perf_30d, strategies = calculate_quality_score(df_d, entry, sl, tp, is_bullish, market_bonus, found_sweep, indicators)
+        
+        # ❌ 舊代碼錯誤： rvol_val = rvol.iloc[-1] (這裡會報錯，因為 rvol 已經是數字了)
+        # ✅ 現在已經在上面一行解決了
 
         is_wait = (signal == "WAIT")
         should_plot = (signal == "LONG") or found_sweep or (score >= 80)
@@ -325,7 +332,7 @@ def process_ticker(t, app_data_dict, market_bonus):
 
 # --- 9. 主程式 ---
 def main():
-    print("🚀 啟動分析程式 (封面顯示爆量強化版)...")
+    print("🚀 啟動分析程式 (Bug已修復，封面顯示爆量)...")
     
     market_status, market_text, market_bonus = get_market_condition()
     market_color = "#10b981" if market_status == "BULLISH" else ("#ef4444" if market_status == "BEARISH" else "#fbbf24")
@@ -375,7 +382,7 @@ def main():
             score = data['score']
             rvol = data.get('rvol', 0)
             
-            # 🔥 這裡處理卡片顯示的爆量
+            # 🔥 處理卡片顯示的爆量 (全部顯示，爆量變色)
             if rvol > 1.2:
                 rvol_tag = f"<div style='color:#f472b6;font-weight:bold;margin-top:2px;font-size:0.8rem'>Vol {rvol:.1f}x 🔥</div>"
             else:
