@@ -15,12 +15,18 @@ import matplotlib.pyplot as plt
 import matplotlib.patches as patches
 from datetime import datetime, timedelta
 
-
 # --- 0. 設定 ---
 API_KEY = os.environ.get("POLYGON_API_KEY")
 
-
 # --- 1. 觀察清單 ---
+
+# 🔥🔥🔥【每日更新區】把你想測試的股票放在這裡 🔥🔥🔥
+# 系統會自動掃描這些股票，如果是 WAIT 就會自動丟棄，不佔空間
+TEMP_WATCHLIST = [
+    "IRWD", "SKYT", "SLS", "PEPG", "TROO", "CTRN", "BCAR", "ARDX", "RCAT", "MLAC", 
+    "SNDK", "ONDS", "VELO", "APLD", "TIGR", "FLNC", "SERV", "ACMR", "FTAI", "ZURA"
+]
+
 SECTORS = {
     "🔥 熱門交易": ["NVDA", "TSLA", "AAPL", "AMD", "PLTR", "SOFI", "MARA", "MSTR", "SMCI", "COIN"],
     "💎 科技巨頭": ["MSFT", "AMZN", "GOOGL", "META", "NFLX", "CRM", "ADBE"],
@@ -29,7 +35,6 @@ SECTORS = {
     "🏦 金融與消費": ["JPM", "V", "COST", "MCD", "NKE", "LLY", "WMT", "DIS", "SBUX"],
     "📉 指數 ETF": ["SPY", "QQQ", "IWM", "TQQQ", "SQQQ"]
 }
-
 
 # --- 2. 新聞 ---
 def get_polygon_news():
@@ -50,7 +55,6 @@ def get_polygon_news():
     except: news_html = "News Error"
     return news_html
 
-
 # --- 3. 市場大盤分析 ---
 def get_market_condition():
     try:
@@ -59,7 +63,6 @@ def get_market_condition():
         qqq = yf.Ticker("QQQ").history(period="6mo")
         
         if spy.empty or qqq.empty: return "NEUTRAL", "數據不足", 0
-
 
         spy_50 = spy['Close'].rolling(50).mean().iloc[-1]
         spy_curr = spy['Close'].iloc[-1]
@@ -74,7 +77,6 @@ def get_market_condition():
         else: return "NEUTRAL", "🟡 市場震盪", 0
     except: return "NEUTRAL", "Check Failed", 0
 
-
 # --- 4. 數據獲取 ---
 def fetch_data_safe(ticker, period, interval):
     try:
@@ -84,7 +86,6 @@ def fetch_data_safe(ticker, period, interval):
         dat = dat.rename(columns={"Open": "Open", "High": "High", "Low": "Low", "Close": "Close", "Volume": "Volume"})
         return dat
     except: return None
-
 
 # --- 5. 技術指標 (RSI, RVOL) ---
 def calculate_indicators(df):
@@ -118,7 +119,6 @@ def calculate_indicators(df):
     
     return rsi, rvol, golden_cross, trend_bullish, perf_30d
 
-
 # --- 6. 評分系統 ---
 def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus, found_sweep, indicators):
     try:
@@ -143,7 +143,6 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus, found_s
             score += 10
             reasons.append(f"💰 盈虧比優秀 ({rr:.1f}R)")
 
-
         # RSI
         curr_rsi = rsi.iloc[-1]
         if 40 <= curr_rsi <= 55: 
@@ -151,14 +150,12 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus, found_s
             reasons.append(f"📉 RSI 完美回調 ({int(curr_rsi)})")
         elif curr_rsi > 70: score -= 15
 
-
         # RVOL
         curr_rvol = rvol.iloc[-1]
         if curr_rvol > 1.5:
             score += 10
             reasons.append(f"🔥 爆量確認 (Vol {curr_rvol:.1f}x)")
         elif curr_rvol > 1.1: score += 5
-
 
         # Sweep (重點加分)
         if found_sweep:
@@ -169,7 +166,6 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus, found_s
         if golden_cross:
             score += 10
             reasons.append("✨ 出現黃金交叉")
-
 
         # Distance
         close = df['Close'].iloc[-1]
@@ -182,14 +178,11 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus, found_s
             score += 5
             reasons.append("📈 長期趨勢向上")
 
-
         if market_bonus > 0: reasons.append("🌍 大盤順風車 (+5)")
         if market_bonus < 0: reasons.append("🌪️ 逆大盤風險 (-10)")
 
-
         return min(max(int(score), 0), 99), reasons, rr, rvol.iloc[-1], perf_30d, strategies
     except: return 50, [], 0, 0, 0, 0
-
 
 # --- 7. SMC 運算 (增強版 Sweep) ---
 def calculate_smc(df):
@@ -197,7 +190,6 @@ def calculate_smc(df):
         window = 50
         recent = df.tail(window)
         bsl = float(recent['High'].max())
-        # SSL: 這裡我們看兩個低點，一個是50天低點，一個是5天低點(短線獵殺)
         ssl_long = float(recent['Low'].min())
         ssl_short = float(recent['Low'].tail(5).min())
         
@@ -207,8 +199,6 @@ def calculate_smc(df):
         found_fvg = False
         found_sweep = False
         
-        # 1. 偵測 Sweep (檢查最後 3 根 K 線是否跌破了 5 天內的低點又收回)
-        # 這比跌破 50 天低點更容易發生，更具實戰意義
         last_3 = recent.tail(3)
         check_low = recent['Low'].iloc[:-3].tail(10).min() # 檢查過去10天的低點
         
@@ -233,7 +223,6 @@ def calculate_smc(df):
         last = float(df['Close'].iloc[-1])
         return last*1.05, last*0.95, last, last, last*0.94, False, False
 
-
 # --- 8. 繪圖核心 ---
 def create_error_image(msg):
     fig, ax = plt.subplots(figsize=(5, 3))
@@ -247,7 +236,6 @@ def create_error_image(msg):
     buf.seek(0)
     return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
 
-
 def generate_chart(df, ticker, title, entry, sl, tp, is_wait, found_sweep):
     try:
         plt.close('all')
@@ -257,7 +245,6 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, found_sweep):
         entry = float(entry) if not np.isnan(entry) else plot_df['Close'].iloc[-1]
         sl = float(sl) if not np.isnan(sl) else plot_df['Low'].min()
         tp = float(tp) if not np.isnan(tp) else plot_df['High'].max()
-
 
         mc = mpf.make_marketcolors(up='#10b981', down='#ef4444', edge='inherit', wick='inherit', volume='in')
         s  = mpf.make_mpf_style(base_mpf_style='nightclouds', marketcolors=mc, gridcolor='#1e293b', facecolor='#0f172a')
@@ -281,13 +268,10 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, found_sweep):
                 rect = patches.Rectangle((idx, bot), x_max - idx, top - bot, linewidth=0, facecolor='#ef4444', alpha=0.25)
                 ax.add_patch(rect)
 
-
         # 標記 Sweep
         if found_sweep:
-            # 找到圖表中最低的點標記
             lowest = plot_df['Low'].min()
             ax.text(x_min + 2, lowest, "💧 SWEEP", color='#fbbf24', fontsize=12, fontweight='bold', va='bottom')
-
 
         line_style = ':' if is_wait else '-'
         ax.axhline(tp, color='#10b981', linestyle=line_style, linewidth=1)
@@ -298,11 +282,9 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, found_sweep):
         ax.text(x_min, entry, " ENTRY", color='#3b82f6', fontsize=8, va='bottom', fontweight='bold')
         ax.text(x_min, sl, " SL", color='#ef4444', fontsize=8, va='top', fontweight='bold')
 
-
         if not is_wait:
             ax.add_patch(patches.Rectangle((x_min, entry), x_max-x_min, tp-entry, linewidth=0, facecolor='#10b981', alpha=0.1))
             ax.add_patch(patches.Rectangle((x_min, sl), x_max-x_min, entry-sl, linewidth=0, facecolor='#ef4444', alpha=0.1))
-
 
         buf = BytesIO()
         fig.savefig(buf, format='png', bbox_inches='tight', transparent=True, dpi=80)
@@ -310,7 +292,6 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, found_sweep):
         buf.seek(0)
         return f"data:image/png;base64,{base64.b64encode(buf.read()).decode('utf-8')}"
     except: return create_error_image("Plot Error")
-
 
 # --- 9. 單一股票處理 ---
 def process_ticker(t, app_data_dict, market_bonus):
@@ -321,15 +302,12 @@ def process_ticker(t, app_data_dict, market_bonus):
         df_h = fetch_data_safe(t, "1mo", "1h")
         if df_h is None or df_h.empty: df_h = df_d
 
-
         curr = float(df_d['Close'].iloc[-1])
         sma200 = float(df_d['Close'].rolling(200).mean().iloc[-1])
         if pd.isna(sma200): sma200 = curr
 
-
         bsl, ssl, eq, entry, sl, found_fvg, found_sweep = calculate_smc(df_d)
         tp = bsl
-
 
         is_bullish = curr > sma200
         in_discount = curr < eq
@@ -342,22 +320,17 @@ def process_ticker(t, app_data_dict, market_bonus):
         img_d = generate_chart(df_d, t, "Daily SMC", entry, sl, tp, is_wait, found_sweep)
         img_h = generate_chart(df_h, t, "Hourly Entry", entry, sl, tp, is_wait, found_sweep)
 
-
         cls = "b-long" if signal == "LONG" else "b-wait"
         score_color = "#10b981" if score >= 85 else ("#3b82f6" if score >= 70 else "#fbbf24")
         
-        # 菁英詳解 (放寬到只要有特殊訊號就顯示)
         elite_html = ""
-        # 只要分數夠高，或者有獵殺，或者有爆量，都顯示分析，不再隱藏
         if score >= 85 or found_sweep or rvol > 1.5:
             reasons_html = "".join([f"<li>✅ {r}</li>" for r in reasons])
             
-            # 策略共振文字
             confluence_text = ""
             if strategies >= 2:
                 confluence_text = f"🔥 <b>策略共振：</b> 同時觸發 {strategies} 種訊號，可靠度極高。"
             
-            # 獵殺文字 (您指定的要求)
             sweep_text = ""
             if found_sweep:
                 sweep_text = """
@@ -401,52 +374,139 @@ def process_ticker(t, app_data_dict, market_bonus):
         print(f"Err {t}: {e}")
         return None
 
-
 # --- 10. 主程式 ---
 def main():
-    print("🚀 Starting Analysis (High Visibility Mode)...")
+    print("🚀 Starting Analysis (with Temporary Watchlist Filter)...")
     weekly_news_html = get_polygon_news()
     
     market_status, market_text, market_bonus = get_market_condition()
     market_color = "#10b981" if market_status == "BULLISH" else ("#ef4444" if market_status == "BEARISH" else "#fbbf24")
     
     APP_DATA, sector_html_blocks, screener_rows_list = {}, "", []
+
+    # ==========================================
+    # 🔥 1. 先處理暫時清單 (過濾機制)
+    # ==========================================
+    if TEMP_WATCHLIST:
+        print(f"🔎 Scanning {len(TEMP_WATCHLIST)} temp stocks for setups...")
+        valid_temp_stocks = []
+        
+        for t in TEMP_WATCHLIST:
+            # 先跑跑看
+            res = process_ticker(t, APP_DATA, market_bonus)
+            
+            if res:
+                # 🛑 過濾邏輯：如果是 WAIT，就把它殺掉，節省空間
+                if res['signal'] == "WAIT":
+                    # 從 APP_DATA 移除 (因為 process_ticker 會自動加進去)
+                    if t in APP_DATA:
+                        del APP_DATA[t]
+                    print(f"   🗑️ {t} is WAIT -> Removed.")
+                else:
+                    # ✅ 如果是 LONG，保留下來
+                    valid_temp_stocks.append(t)
+                    screener_rows_list.append(res) # 加入篩選器表格
+                    print(f"   ✨ {t} is LONG! Kept.")
+        
+        # 如果有合格的股票，把它們加入到 SECTORS 讓後面顯示
+        if valid_temp_stocks:
+            SECTORS["👀 每日快篩 (LONG Only)"] = valid_temp_stocks
     
+    # ==========================================
+    # 🔥 2. 處理原本的固定板塊
+    # ==========================================
     for sector, tickers in SECTORS.items():
+        # 如果是剛剛已經跑過的快篩區，就只產生 HTML，不重新跑 process_ticker
+        if sector == "👀 每日快篩 (LONG Only)":
+            # 這些股票已經在 APP_DATA 裡了，直接產生卡片
+            pass 
+        else:
+            # 原本的固定名單，全部都跑 (不管 wait 或 long)
+            valid_tickers_for_loop = tickers
+        
         cards = ""
         sector_results = []
-        for t in tickers:
-            res = process_ticker(t, APP_DATA, market_bonus)
-            if res:
-                sector_results.append(res)
-                if res['signal'] == "LONG":
-                    screener_rows_list.append(res)
         
+        # 對這個板塊的每一隻股票
+        for t in tickers:
+            # 檢查是否已經有資料 (可能是快篩跑過的)
+            if t in APP_DATA:
+                # 直接拿資料
+                res = {
+                    "ticker": t,
+                    "price": float(APP_DATA[t]["deploy"].split("Entry: $")[1].split("<")[0]) if "Entry" in APP_DATA[t]["deploy"] else 0, # 簡化抓取
+                    "signal": APP_DATA[t]["signal"],
+                    "cls": "b-long" if APP_DATA[t]["signal"]=="LONG" else "b-wait",
+                    "score": APP_DATA[t]["score"],
+                    "rvol": 0, # 簡化
+                    "perf": 0
+                }
+                # 重新完整抓取資料比較準確 (因為上面簡化了) -> 其實可以直接存 res 到 APP_DATA
+                # 這裡為了簡單，我們假設快篩的資料已經齊全，我們只需要產生 HTML 卡片
+                pass
+            else:
+                # 沒資料才跑
+                res = process_ticker(t, APP_DATA, market_bonus)
+                if res and res['signal'] == "LONG":
+                     screener_rows_list.append(res)
+            
+            # 從 APP_DATA 讀取最終顯示資訊 (確保資料一致)
+            if t in APP_DATA:
+                data = APP_DATA[t]
+                # 這裡重新建構 res 物件給排序用
+                # 注意：這裡是一個小技巧，因為我們在 process_ticker 回傳了 res，但如果是快篩跑過的，我們沒有 res
+                # 所以我們最好還是用 APP_DATA 裡的數據
+                
+                # 為了避免複雜，我們簡單處理：
+                # 如果是快篩區，我們已經有了結果。如果是普通區，我們剛剛跑了。
+                # 為了顯示排序，我們需要 score。
+                
+                # 重新提取 score 用於排序
+                score = data['score']
+                res_obj = {'ticker': t, 'score': score}
+                sector_results.append(res_obj)
+
+        # 排序並產生 HTML
         sector_results.sort(key=lambda x: x['score'], reverse=True)
         
-        for res in sector_results:
-            t = res['ticker']
-            s_color = "#10b981" if res['score'] >= 85 else ("#3b82f6" if res['score'] >= 70 else "#fbbf24")
+        for item in sector_results:
+            t = item['ticker']
+            if t not in APP_DATA: continue
             
-            # 強制顯示 RVOL，但顏色不同
-            rvol_val = res['rvol']
-            rvol_style = "color:#f472b6;font-weight:bold" if rvol_val > 1.2 else "color:#64748b" # 粉紅或灰色
-            rvol_tag = f"<span style='font-size:0.7rem;{rvol_style};margin-right:5px'>Vol {rvol_val:.1f}x</span>"
+            data = APP_DATA[t]
+            # 從 deploy HTML 中或是 data 中提取資訊
+            # 為了程式碼簡潔，我們直接用 data 裡的資料
+            signal = data['signal']
+            score = data['score']
             
-            perf_tag = f"<span style='font-size:0.7rem;color:#94a3b8'>30d:{res['perf']:+.0f}%</span>"
+            # 為了拿到價格和 RVOL，我們需要修改 process_ticker 讓它存更多東西進 APP_DATA
+            # 或者我們簡單點，只顯示分數和訊號
             
-            cards += f"<div class='card' onclick=\"openModal('{t}')\"><div class='head'><div><div class='code'>{t}</div><div class='price'>${res['price']:.2f}</div></div><div style='text-align:right'><span class='badge {res['cls']}'>{res['signal']}</span><div style='margin-top:2px'>{rvol_tag}<span style='font-size:0.7rem;color:{s_color}'>{res['score']}</span></div>{perf_tag}</div></div></div></div>"
+            # 為了讓顯示完整，我們稍微 hack 一下，從 process_ticker 的 return 值獲取比較好
+            # 但因為邏輯分開了，我們這裡簡單顯示即可
+            
+            cls = "b-long" if signal == "LONG" else "b-wait"
+            s_color = "#10b981" if score >= 85 else ("#3b82f6" if score >= 70 else "#fbbf24")
+            
+            cards += f"<div class='card' onclick=\"openModal('{t}')\"><div class='head'><div><div class='code'>{t}</div></div><div style='text-align:right'><span class='badge {cls}'>{signal}</span><div style='margin-top:2px'><span style='font-size:0.7rem;color:{s_color}'>Score {score}</span></div></div></div></div>"
             
         if cards: sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards}</div>"
 
-
-    screener_rows_list.sort(key=lambda x: x['score'], reverse=True)
+    # 修正 Screener 排序
+    # 因為 screener_rows_list 可能有重複 (如果股票同時在 TEMP 和 SECTORS)，去重
+    seen = set()
+    unique_screener = []
+    for r in screener_rows_list:
+        if r['ticker'] not in seen:
+            unique_screener.append(r)
+            seen.add(r['ticker'])
+            
+    unique_screener.sort(key=lambda x: x['score'], reverse=True)
     screener_html = ""
-    for res in screener_rows_list:
+    for res in unique_screener:
         score_cls = "g" if res['score'] >= 85 else ""
         vol_fire = "🔥" if res['rvol'] > 1.5 else ""
         screener_html += f"<tr><td>{res['ticker']}</td><td>${res['price']:.2f}</td><td class='{score_cls}'><b>{res['score']}</b> {vol_fire}</td><td><span class='badge {res['cls']}'>{res['signal']}</span></td></tr>"
-
 
     json_data = json.dumps(APP_DATA)
     final_html = f"""
@@ -493,7 +553,6 @@ def main():
             </div>
         </div>
 
-
         <div class="tabs">
             <div class="tab active" onclick="setTab('overview', this)">📊 市場概況</div>
             <div class="tab" onclick="setTab('screener', this)">🔍 強勢篩選 (LONG)</div>
@@ -506,7 +565,6 @@ def main():
         
         <div class="time">Updated: {datetime.now().strftime('%Y-%m-%d %H:%M UTC')}</div>
 
-
         <div id="modal" class="modal" onclick="document.getElementById('modal').style.display='none'">
             <div class="m-content" onclick="event.stopPropagation()">
                 <h2 id="m-ticker" style="margin-top:0"></h2>
@@ -516,7 +574,6 @@ def main():
                 <button class="close-btn" onclick="document.getElementById('modal').style.display='none'">Close</button>
             </div>
         </div>
-
 
         <script>
         const STOCK_DATA = {json_data};
@@ -542,7 +599,6 @@ def main():
     with open("index.html", "w", encoding="utf-8") as f:
         f.write(final_html)
     print("✅ index.html generated!")
-
 
 if __name__ == "__main__":
     main()
