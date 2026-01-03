@@ -1,10 +1,3 @@
-沒問題！這是最完整的 V8.0 企業級分批版 (Enterprise Batch Edition) 程式碼。
-這個版本包含了：
- * CSV 讀取功能：自動讀取您的 nasdaq_mid_large_caps (2).csv。
- * 分批執行選單：詢問您要跑第幾批（不用一次跑完）。
- * 智能繪圖 (Smart Plot)：只有好股票才畫圖，節省時間與空間。
- * 自動化準備：已經內建了 GitHub Actions 的判斷邏輯（方便您未來自動化）。
-請複製以下代碼，並完全覆蓋您現有的 main.py：
 import os
 import matplotlib
 # 1. 強制設定後台繪圖 (最優先，防止在雲端或無螢幕環境報錯)
@@ -548,4 +541,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
