@@ -1,6 +1,6 @@
 import os
 import matplotlib
-# 1. 強制設定後台繪圖 (最優先，防止無螢幕環境報錯)
+# 1. 強制設定後台繪圖 (最優先)
 matplotlib.use('Agg') 
 import requests
 import yfinance as yf
@@ -105,7 +105,6 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus, found_s
         reasons = []
         rsi, rvol, golden_cross, trend, perf_30d = indicators
         
-        # Strategies
         strategies = 0
         if found_sweep: strategies += 1
         if golden_cross: strategies += 1
@@ -136,7 +135,7 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus, found_s
             reasons.append(f"🔥 爆量確認 (Vol {curr_rvol:.1f}x)")
         elif curr_rvol > 1.1: score += 5
 
-        # Sweep (重點加分)
+        # Sweep
         if found_sweep:
             score += 20
             reasons.append("💧 觸發流動性獵殺 (Sweep)")
@@ -163,7 +162,7 @@ def calculate_quality_score(df, entry, sl, tp, is_bullish, market_bonus, found_s
         return min(max(int(score), 0), 99), reasons, rr, rvol.iloc[-1], perf_30d, strategies
     except: return 50, [], 0, 0, 0, 0
 
-# --- 6. SMC 運算 (增強版 Sweep) ---
+# --- 6. SMC 運算 ---
 def calculate_smc(df):
     try:
         window = 50
@@ -177,7 +176,6 @@ def calculate_smc(df):
         found_fvg = False
         found_sweep = False
         
-        # 1. 偵測 Sweep
         last_3 = recent.tail(3)
         check_low = recent['Low'].iloc[:-3].tail(10).min() 
         
@@ -185,10 +183,9 @@ def calculate_smc(df):
             candle = last_3.iloc[i]
             if candle['Low'] < check_low and candle['Close'] > check_low:
                 found_sweep = True
-                best_entry = check_low # 獵殺點即入場點
+                best_entry = check_low 
                 break
         
-        # 2. 偵測 FVG
         for i in range(2, len(recent)):
             if recent['Low'].iloc[i] > recent['High'].iloc[i-2]:
                 fvg = float(recent['Low'].iloc[i])
@@ -235,7 +232,6 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, found_sweep):
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # FVG
         for i in range(2, len(plot_df)):
             idx = i - 1
             if plot_df['Low'].iloc[i] > plot_df['High'].iloc[i-2]: # Bullish
@@ -247,7 +243,6 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, found_sweep):
                 rect = patches.Rectangle((idx, bot), x_max - idx, top - bot, linewidth=0, facecolor='#ef4444', alpha=0.25)
                 ax.add_patch(rect)
 
-        # 標記 Sweep
         if found_sweep:
             lowest = plot_df['Low'].min()
             ax.text(x_min + 2, lowest, "💧 SWEEP", color='#fbbf24', fontsize=12, fontweight='bold', va='bottom')
@@ -257,10 +252,6 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, found_sweep):
         ax.axhline(entry, color='#3b82f6', linestyle=line_style, linewidth=1)
         ax.axhline(sl, color='#ef4444', linestyle=line_style, linewidth=1)
         
-        ax.text(x_min, tp, " TP", color='#10b981', fontsize=8, va='bottom', fontweight='bold')
-        ax.text(x_min, entry, " ENTRY", color='#3b82f6', fontsize=8, va='bottom', fontweight='bold')
-        ax.text(x_min, sl, " SL", color='#ef4444', fontsize=8, va='top', fontweight='bold')
-
         if not is_wait:
             ax.add_patch(patches.Rectangle((x_min, entry), x_max-x_min, tp-entry, linewidth=0, facecolor='#10b981', alpha=0.1))
             ax.add_patch(patches.Rectangle((x_min, sl), x_max-x_min, entry-sl, linewidth=0, facecolor='#ef4444', alpha=0.1))
@@ -294,10 +285,9 @@ def process_ticker(t, app_data_dict, market_bonus):
         
         indicators = calculate_indicators(df_d)
         score, reasons, rr, rvol, perf_30d, strategies = calculate_quality_score(df_d, entry, sl, tp, is_bullish, market_bonus, found_sweep, indicators)
-        rvol_val = rvol.iloc[-1] # 取得最新 RVOL 值
+        rvol_val = rvol.iloc[-1]
 
         is_wait = (signal == "WAIT")
-        
         should_plot = (signal == "LONG") or found_sweep or (score >= 80)
         
         if should_plot:
@@ -312,43 +302,20 @@ def process_ticker(t, app_data_dict, market_bonus):
         elite_html = ""
         if score >= 75 or found_sweep or rvol_val > 1.2 or signal == "LONG":
             reasons_html = "".join([f"<li>✅ {r}</li>" for r in reasons])
-            
             confluence_text = ""
             if strategies >= 2:
                 confluence_text = f"🔥 <b>策略共振：</b> 同時觸發 {strategies} 種訊號，可靠度極高。"
-            
             sweep_text = ""
             if found_sweep:
                 sweep_text = "<div style='margin-top:8px; padding:8px; background:rgba(251,191,36,0.1); border-left:3px solid #fbbf24; color:#fcd34d; font-size:0.85rem;'><b>⚠️ 偵測到流動性獵殺 (Sweep)</b></div>"
-            
-            elite_html = f"""
-            <div style='background:rgba(16,185,129,0.1); border:1px solid #10b981; padding:12px; border-radius:8px; margin:10px 0;'>
-                <div style='font-weight:bold; color:#10b981; margin-bottom:5px;'>💎 AI 分析 (Score {score})</div>
-                <div style='font-size:0.85rem; color:#e2e8f0; margin-bottom:8px;'>{confluence_text}</div>
-                <ul style='margin:0; padding-left:20px; font-size:0.8rem; color:#d1d5db;'>{reasons_html}</ul>
-                {sweep_text}
-            </div>
-            """
+            elite_html = f"<div style='background:rgba(16,185,129,0.1); border:1px solid #10b981; padding:12px; border-radius:8px; margin:10px 0;'><div style='font-weight:bold; color:#10b981; margin-bottom:5px;'>💎 AI 分析 (Score {score})</div><div style='font-size:0.85rem; color:#e2e8f0; margin-bottom:8px;'>{confluence_text}</div><ul style='margin:0; padding-left:20px; font-size:0.8rem; color:#d1d5db;'>{reasons_html}</ul>{sweep_text}</div>"
         
         if signal == "LONG":
-            ai_html = f"""
-            <div class='deploy-box long'>
-                <div class='deploy-title'>✅ LONG SETUP</div>
-                <div style='display:flex;justify-content:space-between;border-bottom:1px solid #333;padding-bottom:5px;margin-bottom:5px;'>
-                    <span>🏆 評分: <b style='color:{score_color};font-size:1.1em'>{score}</b></span>
-                    <span>💰 RR: <b style='color:#10b981'>{rr:.1f}R</b></span>
-                </div>
-                <div style='font-size:0.8rem; color:#94a3b8; margin-bottom:5px;'>📈 近30日績效: {perf_30d:+.1f}%</div>
-                {elite_html}
-                <ul class='deploy-list' style='margin-top:10px'>
-                    <li>TP: ${tp:.2f}</li><li>Entry: ${entry:.2f}</li><li>SL: ${sl:.2f}</li>
-                </ul>
-            </div>"""
+            ai_html = f"<div class='deploy-box long'><div class='deploy-title'>✅ LONG SETUP</div><div style='display:flex;justify-content:space-between;border-bottom:1px solid #333;padding-bottom:5px;margin-bottom:5px;'><span>🏆 評分: <b style='color:{score_color};font-size:1.1em'>{score}</b></span><span>💰 RR: <b style='color:#10b981'>{rr:.1f}R</b></span></div><div style='font-size:0.8rem; color:#94a3b8; margin-bottom:5px;'>📈 近30日績效: {perf_30d:+.1f}%</div>{elite_html}<ul class='deploy-list' style='margin-top:10px'><li>TP: ${tp:.2f}</li><li>Entry: ${entry:.2f}</li><li>SL: ${sl:.2f}</li></ul></div>"
         else:
             reason = "無FVG/Sweep" if (not found_fvg and not found_sweep) else ("逆勢" if not is_bullish else "溢價區")
             ai_html = f"<div class='deploy-box wait'><div class='deploy-title'>⏳ WAIT</div><div>評分: <b style='color:#94a3b8'>{score}</b></div><ul class='deploy-list'><li>狀態: {reason}</li><li>參考入場: ${entry:.2f}</li></ul></div>"
             
-        # 🔥 修復：把 rvol 存入 APP_DATA，這樣後面才能顯示
         app_data_dict[t] = {"signal": signal, "deploy": ai_html, "img_d": img_d, "img_h": img_h, "score": score, "rvol": rvol_val}
         
         return {"ticker": t, "price": curr, "signal": signal, "cls": cls, "score": score, "rvol": rvol_val, "perf": perf_30d}
@@ -358,45 +325,36 @@ def process_ticker(t, app_data_dict, market_bonus):
 
 # --- 9. 主程式 ---
 def main():
-    print("🚀 啟動分析程式 (已恢復 RVOL 爆量顯示)...")
+    print("🚀 啟動分析程式 (封面顯示爆量強化版)...")
     
     market_status, market_text, market_bonus = get_market_condition()
     market_color = "#10b981" if market_status == "BULLISH" else ("#ef4444" if market_status == "BEARISH" else "#fbbf24")
     
     APP_DATA, sector_html_blocks, screener_rows_list = {}, "", []
 
-    # ==========================================
-    # 🔥 1. 處理暫時觀察名單 (自動過濾 WAIT)
-    # ==========================================
+    # 1. 處理暫時觀察名單
     if TEMP_WATCHLIST:
-        print(f"🔎 正在掃描暫時觀察清單 (共 {len(TEMP_WATCHLIST)} 隻)...")
+        print(f"🔎 掃描暫時名單 ({len(TEMP_WATCHLIST)} 隻)...")
         valid_temp_stocks = []
-        
         for t in TEMP_WATCHLIST:
             res = process_ticker(t, APP_DATA, market_bonus)
             if res:
-                # 🛑 過濾邏輯：如果是 WAIT，就把它殺掉
                 if res['signal'] == "WAIT":
                     if t in APP_DATA: del APP_DATA[t]
-                    print(f"   🗑️ {t} 是 WAIT -> 已移除 (不顯示)")
+                    print(f"   🗑️ {t} (WAIT) -> 移除")
                 else:
                     valid_temp_stocks.append(t)
                     screener_rows_list.append(res)
-                    print(f"   ✨ {t} 是 LONG! 保留。")
-        
+                    print(f"   ✨ {t} (LONG) -> 保留")
         if valid_temp_stocks:
             SECTORS["👀 每日快篩 (LONG Only)"] = valid_temp_stocks
     
-    # ==========================================
-    # 🔥 2. 處理固定板塊
-    # ==========================================
+    # 2. 處理固定板塊
     for sector, tickers in SECTORS.items():
         sector_results = []
-        
         for t in tickers:
             if t in APP_DATA:
                 data = APP_DATA[t]
-                # 確保也從 APP_DATA 取出 RVOL
                 res_obj = {'ticker': t, 'score': data['score'], 'signal': data['signal'], 'rvol': data.get('rvol', 0)}
                 sector_results.append(res_obj)
             else:
@@ -412,32 +370,43 @@ def main():
         for item in sector_results:
             t = item['ticker']
             if t not in APP_DATA: continue
-            
             data = APP_DATA[t]
             signal = data['signal']
             score = data['score']
-            rvol = data.get('rvol', 0) # 🔥 取得 RVOL
+            rvol = data.get('rvol', 0)
             
-            # 🔥 恢復爆量顯示邏輯
-            rvol_style = "color:#f472b6;font-weight:bold" if rvol > 1.2 else "color:#64748b"
-            rvol_tag = f"<span style='font-size:0.7rem;{rvol_style};margin-right:5px'>Vol {rvol:.1f}x</span>"
+            # 🔥 這裡處理卡片顯示的爆量
+            if rvol > 1.2:
+                rvol_tag = f"<div style='color:#f472b6;font-weight:bold;margin-top:2px;font-size:0.8rem'>Vol {rvol:.1f}x 🔥</div>"
+            else:
+                rvol_tag = f"<div style='color:#64748b;margin-top:2px;font-size:0.75rem'>Vol {rvol:.1f}x</div>"
             
             cls = "b-long" if signal == "LONG" else "b-wait"
             s_color = "#10b981" if score >= 85 else ("#3b82f6" if score >= 70 else "#fbbf24")
             
-            cards += f"<div class='card' onclick=\"openModal('{t}')\"><div class='head'><div><div class='code'>{t}</div></div><div style='text-align:right'><span class='badge {cls}'>{signal}</span><div style='margin-top:2px'>{rvol_tag}<span style='font-size:0.7rem;color:{s_color}'>{score}</span></div></div></div></div>"
+            cards += f"""
+            <div class='card' onclick="openModal('{t}')">
+                <div class='head'>
+                    <div><div class='code'>{t}</div><div style='font-size:0.7rem;color:#666;margin-top:3px'>Score <span style='color:{s_color}'>{score}</span></div></div>
+                    <div style='text-align:right'>
+                        <span class='badge {cls}'>{signal}</span>
+                        {rvol_tag}
+                    </div>
+                </div>
+            </div>
+            """
             
         if cards: sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards}</div>"
 
-    # 去重 Screener List
+    # 去重
     seen = set()
     unique_screener = []
     for r in screener_rows_list:
         if r['ticker'] not in seen:
             unique_screener.append(r)
             seen.add(r['ticker'])
-            
     unique_screener.sort(key=lambda x: x['score'], reverse=True)
+    
     screener_html = ""
     for res in unique_screener:
         score_cls = "g" if res['score'] >= 85 else ""
@@ -457,11 +426,11 @@ def main():
     .tab.active {{ background:var(--acc); color:white; }}
     .content {{ display:none; }} .content.active {{ display:block; }}
     .sector-title {{ border-left:4px solid var(--acc); padding-left:10px; margin:20px 0 10px; }}
-    .grid {{ display:grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap:10px; }}
-    .card {{ background:var(--card); border:1px solid #333; border-radius:8px; padding:10px; cursor:pointer; }}
-    .head {{ display:flex; justify-content:space-between; margin-bottom:5px; }}
-    .code {{ font-weight:900; }} .price {{ color:#94a3b8; font-family:monospace; }}
-    .badge {{ padding:2px 6px; border-radius:4px; font-size:0.7rem; font-weight:bold; }}
+    .grid {{ display:grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap:10px; }}
+    .card {{ background:var(--card); border:1px solid #333; border-radius:8px; padding:12px; cursor:pointer; }}
+    .head {{ display:flex; justify-content:space-between; align-items:start; }}
+    .code {{ font-weight:900; font-size:1.1rem; }} 
+    .badge {{ padding:2px 6px; border-radius:4px; font-size:0.75rem; font-weight:bold; display:inline-block; }}
     .b-long {{ background:rgba(16,185,129,0.2); color:var(--g); border:1px solid var(--g); }}
     .b-wait {{ background:rgba(148,163,184,0.1); color:#94a3b8; border:1px solid #555; }}
     table {{ width:100%; border-collapse:collapse; font-size:0.85rem; }}
@@ -518,8 +487,7 @@ def main():
         function openModal(ticker) {{
             const data = STOCK_DATA[ticker];
             if (!data) return;
-            // 只有當圖片存在時才顯示，避免破圖
-            const imgD = data.img_d ? '<img src="'+data.img_d+'">' : '<div style="padding:20px;text-align:center;color:#666">No Chart Available (Low Score)</div>';
+            const imgD = data.img_d ? '<img src="'+data.img_d+'">' : '<div style="padding:20px;text-align:center;color:#666">No Chart Available</div>';
             const imgH = data.img_h ? '<img src="'+data.img_h+'">' : '';
             
             document.getElementById('modal').style.display = 'flex';
