@@ -24,7 +24,7 @@ TEMP_WATCHLIST = [
     "SNDK", "ONDS", "VELO", "APLD", "TIGR", "FLNC", "SERV", "ACMR", "FTAI", "ZURA"
 ]
 
-# 固定板塊 (不管訊號為何都會顯示，方便觀察板塊輪動)
+# 固定板塊
 SECTORS = {
     "🔥 熱門交易": ["NVDA", "TSLA", "AAPL", "AMD", "PLTR", "SOFI", "MARA", "MSTR", "SMCI", "COIN"],
     "💎 科技巨頭": ["MSFT", "AMZN", "GOOGL", "META", "NFLX", "CRM", "ADBE"],
@@ -177,7 +177,7 @@ def calculate_smc(df):
         found_fvg = False
         found_sweep = False
         
-        # 1. 偵測 Sweep (檢查最後 3 根 K 線是否跌破了 10 天內的低點又收回)
+        # 1. 偵測 Sweep
         last_3 = recent.tail(3)
         check_low = recent['Low'].iloc[:-3].tail(10).min() 
         
@@ -235,7 +235,7 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, found_sweep):
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # FVG / Imbalance
+        # FVG
         for i in range(2, len(plot_df)):
             idx = i - 1
             if plot_df['Low'].iloc[i] > plot_df['High'].iloc[i-2]: # Bullish
@@ -294,13 +294,10 @@ def process_ticker(t, app_data_dict, market_bonus):
         
         indicators = calculate_indicators(df_d)
         score, reasons, rr, rvol, perf_30d, strategies = calculate_quality_score(df_d, entry, sl, tp, is_bullish, market_bonus, found_sweep, indicators)
-        
+        rvol_val = rvol.iloc[-1] # 取得最新 RVOL 值
+
         is_wait = (signal == "WAIT")
         
-        # 為了節省空間，只有在以下情況才畫圖：
-        # 1. LONG 訊號 
-        # 2. 或者有 Sweep (高價值反轉)
-        # 3. 或者分數很高
         should_plot = (signal == "LONG") or found_sweep or (score >= 80)
         
         if should_plot:
@@ -313,8 +310,7 @@ def process_ticker(t, app_data_dict, market_bonus):
         score_color = "#10b981" if score >= 85 else ("#3b82f6" if score >= 70 else "#fbbf24")
         
         elite_html = ""
-        # 顯示詳細分析的條件放寬一點，讓使用者能看到為什麼是 WAIT
-        if score >= 75 or found_sweep or rvol > 1.2 or signal == "LONG":
+        if score >= 75 or found_sweep or rvol_val > 1.2 or signal == "LONG":
             reasons_html = "".join([f"<li>✅ {r}</li>" for r in reasons])
             
             confluence_text = ""
@@ -352,15 +348,17 @@ def process_ticker(t, app_data_dict, market_bonus):
             reason = "無FVG/Sweep" if (not found_fvg and not found_sweep) else ("逆勢" if not is_bullish else "溢價區")
             ai_html = f"<div class='deploy-box wait'><div class='deploy-title'>⏳ WAIT</div><div>評分: <b style='color:#94a3b8'>{score}</b></div><ul class='deploy-list'><li>狀態: {reason}</li><li>參考入場: ${entry:.2f}</li></ul></div>"
             
-        app_data_dict[t] = {"signal": signal, "deploy": ai_html, "img_d": img_d, "img_h": img_h, "score": score}
-        return {"ticker": t, "price": curr, "signal": signal, "cls": cls, "score": score, "rvol": rvol, "perf": perf_30d}
+        # 🔥 修復：把 rvol 存入 APP_DATA，這樣後面才能顯示
+        app_data_dict[t] = {"signal": signal, "deploy": ai_html, "img_d": img_d, "img_h": img_h, "score": score, "rvol": rvol_val}
+        
+        return {"ticker": t, "price": curr, "signal": signal, "cls": cls, "score": score, "rvol": rvol_val, "perf": perf_30d}
     except Exception as e:
         print(f"Err {t}: {e}")
         return None
 
 # --- 9. 主程式 ---
 def main():
-    print("🚀 啟動分析程式 (已移除新聞功能)...")
+    print("🚀 啟動分析程式 (已恢復 RVOL 爆量顯示)...")
     
     market_status, market_text, market_bonus = get_market_condition()
     market_color = "#10b981" if market_status == "BULLISH" else ("#ef4444" if market_status == "BEARISH" else "#fbbf24")
@@ -382,12 +380,10 @@ def main():
                     if t in APP_DATA: del APP_DATA[t]
                     print(f"   🗑️ {t} 是 WAIT -> 已移除 (不顯示)")
                 else:
-                    # ✅ 如果是 LONG，保留下來
                     valid_temp_stocks.append(t)
                     screener_rows_list.append(res)
                     print(f"   ✨ {t} 是 LONG! 保留。")
         
-        # 只有當有合格股票時，才建立這個板塊
         if valid_temp_stocks:
             SECTORS["👀 每日快篩 (LONG Only)"] = valid_temp_stocks
     
@@ -395,26 +391,21 @@ def main():
     # 🔥 2. 處理固定板塊
     # ==========================================
     for sector, tickers in SECTORS.items():
-        # 如果是快篩區，股票已經在 APP_DATA 裡了，我們只需要產生 HTML
-        # 如果是固定板塊，需要跑分析
-        
         sector_results = []
         
         for t in tickers:
             if t in APP_DATA:
-                # 已有資料 (來自快篩)
                 data = APP_DATA[t]
-                res_obj = {'ticker': t, 'score': data['score'], 'signal': data['signal']}
+                # 確保也從 APP_DATA 取出 RVOL
+                res_obj = {'ticker': t, 'score': data['score'], 'signal': data['signal'], 'rvol': data.get('rvol', 0)}
                 sector_results.append(res_obj)
             else:
-                # 沒資料，跑分析
                 res = process_ticker(t, APP_DATA, market_bonus)
                 if res:
                     sector_results.append(res)
                     if res['signal'] == "LONG":
                         screener_rows_list.append(res)
 
-        # 排序
         sector_results.sort(key=lambda x: x['score'], reverse=True)
         
         cards = ""
@@ -425,22 +416,16 @@ def main():
             data = APP_DATA[t]
             signal = data['signal']
             score = data['score']
+            rvol = data.get('rvol', 0) # 🔥 取得 RVOL
             
-            # 從 deploy HTML 中提取價格 (簡單解析)
-            try:
-                # 嘗試抓價格，如果抓不到就顯示 N/A
-                price_part = data['deploy'].split("Entry: $")
-                if len(price_part) > 1:
-                    price_str = price_part[1].split("<")[0]
-                    # 這裡的價格其實是 Entry Price，不是現價，但為了卡片顯示可以用
-                else:
-                    price_str = "-"
-            except: price_str = "-"
+            # 🔥 恢復爆量顯示邏輯
+            rvol_style = "color:#f472b6;font-weight:bold" if rvol > 1.2 else "color:#64748b"
+            rvol_tag = f"<span style='font-size:0.7rem;{rvol_style};margin-right:5px'>Vol {rvol:.1f}x</span>"
             
             cls = "b-long" if signal == "LONG" else "b-wait"
             s_color = "#10b981" if score >= 85 else ("#3b82f6" if score >= 70 else "#fbbf24")
             
-            cards += f"<div class='card' onclick=\"openModal('{t}')\"><div class='head'><div><div class='code'>{t}</div></div><div style='text-align:right'><span class='badge {cls}'>{signal}</span><div style='margin-top:2px'><span style='font-size:0.7rem;color:{s_color}'>Score {score}</span></div></div></div></div>"
+            cards += f"<div class='card' onclick=\"openModal('{t}')\"><div class='head'><div><div class='code'>{t}</div></div><div style='text-align:right'><span class='badge {cls}'>{signal}</span><div style='margin-top:2px'>{rvol_tag}<span style='font-size:0.7rem;color:{s_color}'>{score}</span></div></div></div></div>"
             
         if cards: sector_html_blocks += f"<h3 class='sector-title'>{sector}</h3><div class='grid'>{cards}</div>"
 
