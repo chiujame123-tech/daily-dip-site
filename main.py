@@ -290,7 +290,7 @@ def get_polygon_news():
                 dt = item.get('published_utc', '')[:10]
                 news_html += f"<div class='news-card'><div class='news-meta'><span class='news-source'>{pub}</span><span class='news-date'>{dt}</span></div><a href='{article_url}' target='_blank' class='news-title'>{title}</a></div>"
         else: 
-            news_html = "<div style='padding:20px;text-align:center'>No News Found</div>"
+            news_html = "<div style='padding:20px'>No News Found</div>"
     except Exception as e: 
         news_html = f"<div style='padding:20px'>News Error: {e}</div>"
     return news_html
@@ -383,6 +383,9 @@ def calculate_indicators(df):
 # ==================== 14. 🔥 優化版評分系統 ====================
 def calculate_advanced_score(ticker, df, entry, sl, tp, market_bonus, sweep_type, indicators):
     """更精準的評分系統"""
+    # 🔥 修復 1：初始化 strategies 變數，防止 NameError
+    strategies = 0
+    
     try:
         score = 50 + market_bonus
         reasons = []
@@ -531,13 +534,19 @@ def calculate_advanced_score(ticker, df, entry, sl, tp, market_bonus, sweep_type
         elif confluence_count >= 3:
             score += 8
         
+        # 計算策略總數 (strategies) 用於顯示
+        if sweep_type: strategies += 1
+        if has_bos: strategies += 1
+        if mtf_score > 0: strategies += 1
+        if golden_cross: strategies += 1
+        
         return max(int(score), 0), reasons, rr, curr_rvol, perf_30d, strategies
         
     except Exception as e:
         print(f"Scoring Error: {e}")
         return 50, [], 0, 0, 0, 0
 
-# ==================== 15. 🔥 優化版 SMC 計算 (含崩潰修復) ====================
+# ==================== 15. 🔥 優化版 SMC 計算 ====================
 def calculate_smc_v2(df):
     """SMC 核心計算 - 優化版"""
     try:
@@ -662,7 +671,6 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, sweep_type):
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
-        # 繪製 Order Blocks (視覺化機構訂單區)
         if sweep_type:
             lowest = plot_df['Low'].min()
             label_text = "🌊 MAJOR SWEEP" if sweep_type == "MAJOR" else "💧 MINOR SWEEP"
@@ -807,6 +815,9 @@ def main():
     print("🚀 啟動超級篩選器 (SMC V2 Optimized)...")
     weekly_news_html = get_polygon_news()
     market_status, market_text, market_bonus = get_market_condition()
+    
+    # 🔥 修復 2：定義 market_color，防止 NameError
+    market_color = "#10b981" if market_status == "BULLISH" else ("#ef4444" if market_status == "BEARISH" else "#fbbf24")
     
     APP_DATA = {}
     candidates_data = auto_select_candidates()
