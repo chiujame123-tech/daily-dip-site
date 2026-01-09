@@ -537,7 +537,7 @@ def calculate_advanced_score(ticker, df, entry, sl, tp, market_bonus, sweep_type
         print(f"Scoring Error: {e}")
         return 50, [], 0, 0, 0, 0
 
-# ==================== 15. 🔥 優化版 SMC 計算 ====================
+# ==================== 15. 🔥 優化版 SMC 計算 (含崩潰修復) ====================
 def calculate_smc_v2(df):
     """SMC 核心計算 - 優化版"""
     try:
@@ -619,9 +619,12 @@ def calculate_smc_v2(df):
         
     except Exception as e:
         print(f"SMC Error: {e}")
-        last = float(df['Close'].iloc[-1])
-        # 返回 7 個值以匹配解包
-        return last*1.05, last*0.95, last, last, last*0.94, False, None
+        # 🔥 安全修復：防止在 except 區塊中因為讀取 df 再次崩潰
+        try:
+            last = float(df['Close'].iloc[-1])
+            return last*1.05, last*0.95, last, last, last*0.94, False, None
+        except:
+            return 0, 0, 0, 0, 0, False, None
 
 # ==================== 16. 繪圖核心 ====================
 def create_error_image(msg):
@@ -659,6 +662,7 @@ def generate_chart(df, ticker, title, entry, sl, tp, is_wait, sweep_type):
         ax = axlist[0]
         x_min, x_max = ax.get_xlim()
         
+        # 繪製 Order Blocks (視覺化機構訂單區)
         if sweep_type:
             lowest = plot_df['Low'].min()
             label_text = "🌊 MAJOR SWEEP" if sweep_type == "MAJOR" else "💧 MINOR SWEEP"
