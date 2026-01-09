@@ -25,5 +25,32 @@
             "score": 140,
             "sector": "\ud83d\uded2 \u5fc5\u9700\u6d88\u8cbb (\u9632\u79a6)"
         }
+    ],
+    "2026-01-09": [
+        {
+            "ticker": "GE",
+            "score": 156,
+            "sector": "\ud83c\udfed \u5de5\u696d"
+        },
+        {
+            "ticker": "MU",
+            "score": 130,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "GOOGL",
+            "score": 126,
+            "sector": "\ud83d\udce1 \u901a\u8a0a\u8207\u5a92\u9ad4"
+        },
+        {
+            "ticker": "RDDT",
+            "score": 105,
+            "sector": "\ud83d\udce1 \u901a\u8a0a\u8207\u5a92\u9ad4"
+        },
+        {
+            "ticker": "SLB",
+            "score": 103,
+            "sector": "\ud83d\udee2\ufe0f \u80fd\u6e90"
+        }
     ]
 }
