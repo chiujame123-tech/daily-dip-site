@@ -106,5 +106,32 @@
             "score": 111,
             "sector": "\ud83d\udee2\ufe0f \u80fd\u6e90"
         }
+    ],
+    "2026-01-14": [
+        {
+            "ticker": "AMZN",
+            "score": 205,
+            "sector": "\ud83d\udecd\ufe0f \u975e\u5fc5\u9700\u6d88\u8cbb (\u5faa\u74b0)"
+        },
+        {
+            "ticker": "GE",
+            "score": 166,
+            "sector": "\ud83c\udfed \u5de5\u696d"
+        },
+        {
+            "ticker": "GOOGL",
+            "score": 136,
+            "sector": "\ud83d\udce1 \u901a\u8a0a\u8207\u5a92\u9ad4"
+        },
+        {
+            "ticker": "ABNB",
+            "score": 129,
+            "sector": "\ud83d\udecd\ufe0f \u975e\u5fc5\u9700\u6d88\u8cbb (\u5faa\u74b0)"
+        },
+        {
+            "ticker": "MU",
+            "score": 120,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        }
     ]
 }
