@@ -241,5 +241,32 @@
             "score": 123,
             "sector": "\ud83d\udecd\ufe0f \u975e\u5fc5\u9700\u6d88\u8cbb (\u5faa\u74b0)"
         }
+    ],
+    "2026-01-21": [
+        {
+            "ticker": "AMZN",
+            "score": 202,
+            "sector": "\ud83d\udecd\ufe0f \u975e\u5fc5\u9700\u6d88\u8cbb (\u5faa\u74b0)"
+        },
+        {
+            "ticker": "MRVL",
+            "score": 174,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "MU",
+            "score": 173,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "GE",
+            "score": 169,
+            "sector": "\ud83c\udfed \u5de5\u696d"
+        },
+        {
+            "ticker": "ABNB",
+            "score": 133,
+            "sector": "\ud83d\udecd\ufe0f \u975e\u5fc5\u9700\u6d88\u8cbb (\u5faa\u74b0)"
+        }
     ]
 }
