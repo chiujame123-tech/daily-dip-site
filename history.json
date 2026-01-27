@@ -349,5 +349,32 @@
             "score": 133,
             "sector": "\ud83d\udce1 \u901a\u8a0a\u8207\u5a92\u9ad4"
         }
+    ],
+    "2026-01-27": [
+        {
+            "ticker": "NET",
+            "score": 414,
+            "sector": "\ud83d\udcbb \u79d1\u6280\u8207\u8edf\u9ad4"
+        },
+        {
+            "ticker": "SHOP",
+            "score": 146,
+            "sector": "\ud83d\udcbb \u79d1\u6280\u8207\u8edf\u9ad4"
+        },
+        {
+            "ticker": "MS",
+            "score": 144,
+            "sector": "\ud83c\udfe6 \u91d1\u878d\u670d\u52d9"
+        },
+        {
+            "ticker": "MU",
+            "score": 143,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "GS",
+            "score": 140,
+            "sector": "\ud83c\udfe6 \u91d1\u878d\u670d\u52d9"
+        }
     ]
 }
