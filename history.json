@@ -376,5 +376,32 @@
             "score": 140,
             "sector": "\ud83c\udfe6 \u91d1\u878d\u670d\u52d9"
         }
+    ],
+    "2026-01-28": [
+        {
+            "ticker": "MU",
+            "score": 170,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "GE",
+            "score": 145,
+            "sector": "\ud83c\udfed \u5de5\u696d"
+        },
+        {
+            "ticker": "NVDA",
+            "score": 132,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "TXN",
+            "score": 128,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "ASTS",
+            "score": 121,
+            "sector": "\ud83d\udcbb \u79d1\u6280\u8207\u8edf\u9ad4"
+        }
     ]
 }
