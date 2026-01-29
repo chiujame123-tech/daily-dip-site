@@ -403,5 +403,32 @@
             "score": 121,
             "sector": "\ud83d\udcbb \u79d1\u6280\u8207\u8edf\u9ad4"
         }
+    ],
+    "2026-01-29": [
+        {
+            "ticker": "GE",
+            "score": 188,
+            "sector": "\ud83c\udfed \u5de5\u696d"
+        },
+        {
+            "ticker": "MU",
+            "score": 170,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "MRVL",
+            "score": 162,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "NVDA",
+            "score": 140,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "COP",
+            "score": 131,
+            "sector": "\ud83d\udee2\ufe0f \u80fd\u6e90"
+        }
     ]
 }
