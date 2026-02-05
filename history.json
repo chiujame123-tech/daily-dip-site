@@ -511,5 +511,32 @@
             "score": 127,
             "sector": "\ud83d\udecd\ufe0f \u975e\u5fc5\u9700\u6d88\u8cbb (\u5faa\u74b0)"
         }
+    ],
+    "2026-02-05": [
+        {
+            "ticker": "GE",
+            "score": 144,
+            "sector": "\ud83c\udfed \u5de5\u696d"
+        },
+        {
+            "ticker": "MU",
+            "score": 120,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "TSM",
+            "score": 119,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "AMD",
+            "score": 116,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "AAPL",
+            "score": 106,
+            "sector": "\ud83d\udcbb \u79d1\u6280\u8207\u8edf\u9ad4"
+        }
     ]
 }
