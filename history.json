@@ -538,5 +538,32 @@
             "score": 106,
             "sector": "\ud83d\udcbb \u79d1\u6280\u8207\u8edf\u9ad4"
         }
+    ],
+    "2026-02-06": [
+        {
+            "ticker": "GE",
+            "score": 208,
+            "sector": "\ud83c\udfed \u5de5\u696d"
+        },
+        {
+            "ticker": "GS",
+            "score": 152,
+            "sector": "\ud83c\udfe6 \u91d1\u878d\u670d\u52d9"
+        },
+        {
+            "ticker": "NVDA",
+            "score": 142,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "AMD",
+            "score": 135,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        },
+        {
+            "ticker": "MRVL",
+            "score": 124,
+            "sector": "\u26a1 \u534a\u5c0e\u9ad4"
+        }
     ]
 }
