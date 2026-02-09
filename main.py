@@ -929,9 +929,8 @@ def main():
                     if '趨勢分' in display_df.columns:
                         format_dict['趨勢分'] = '{:.0f}%'
                     
+                    # Simple styling without matplotlib dependency
                     styled_df = display_df.style.format(format_dict)
-                    if 'RS' in display_df.columns:
-                        styled_df = styled_df.background_gradient(subset=['RS'], cmap='RdYlGn')
                     
                     st.dataframe(styled_df, use_container_width=True, hide_index=True)
                 
