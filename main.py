@@ -337,28 +337,49 @@ class MarketRegime:
         """
         Comprehensive market health assessment
         """
+        default_result = {
+            'status': '❓ 未知', 
+            'score': 50, 
+            'advice': '無法獲取市場數據',
+            'spy_above_50': None,
+            'spy_above_200': None,
+            'spy_return_1m': None,
+            'vix': None,
+            'spy_price': None
+        }
+        
         try:
-            # Fetch market data
-            spy = yf.download('SPY', period='6mo', progress=False)
-            qqq = yf.download('QQQ', period='6mo', progress=False)
-            vix = yf.download('^VIX', period='1mo', progress=False)
+            # Fetch market data with timeout handling
+            spy = yf.download('SPY', period='6mo', progress=False, timeout=10)
             
-            if len(spy) == 0:
-                return {'status': 'unknown', 'score': 50}
+            # Handle MultiIndex columns
+            if isinstance(spy.columns, pd.MultiIndex):
+                spy.columns = spy.columns.get_level_values(0)
+            
+            if spy is None or len(spy) == 0:
+                return default_result
+            
+            # Try to get VIX
+            try:
+                vix = yf.download('^VIX', period='1mo', progress=False, timeout=10)
+                if isinstance(vix.columns, pd.MultiIndex):
+                    vix.columns = vix.columns.get_level_values(0)
+                vix_current = float(vix['Close'].iloc[-1]) if len(vix) > 0 else 20
+            except:
+                vix_current = 20  # Default VIX
             
             # SPY Analysis
-            spy_close = spy['Close'].iloc[-1]
-            spy_sma50 = spy['Close'].rolling(50).mean().iloc[-1]
-            spy_sma200 = spy['Close'].rolling(200).mean().iloc[-1]
+            spy_close = float(spy['Close'].iloc[-1])
+            spy_sma50 = float(spy['Close'].rolling(50).mean().iloc[-1])
+            spy_sma200 = float(spy['Close'].rolling(200).mean().iloc[-1]) if len(spy) >= 200 else spy_sma50
             spy_above_50 = spy_close > spy_sma50
             spy_above_200 = spy_close > spy_sma200
-            spy_return_1m = (spy_close / spy['Close'].iloc[-21] - 1) * 100
             
-            # VIX
-            vix_current = vix['Close'].iloc[-1] if len(vix) > 0 else 20
-            
-            # Breadth (simplified - % of stocks above SMA50)
-            # In reality, you'd want NYSE breadth data
+            # 1-month return
+            if len(spy) >= 21:
+                spy_return_1m = (spy_close / float(spy['Close'].iloc[-21]) - 1) * 100
+            else:
+                spy_return_1m = 0
             
             # Score calculation
             score = 50
@@ -401,12 +422,14 @@ class MarketRegime:
                 'advice': advice,
                 'spy_above_50': spy_above_50,
                 'spy_above_200': spy_above_200,
-                'spy_return_1m': spy_return_1m,
-                'vix': vix_current,
-                'spy_price': spy_close
+                'spy_return_1m': round(spy_return_1m, 2),
+                'vix': round(vix_current, 1),
+                'spy_price': round(spy_close, 2)
             }
         except Exception as e:
-            return {'status': '❓ 未知', 'score': 50, 'advice': '無法獲取市場數據'}
+            # Log error for debugging
+            print(f"MarketRegime error: {e}")
+            return default_result
 
 
 # ============================================
