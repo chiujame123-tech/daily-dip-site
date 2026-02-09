@@ -861,41 +861,72 @@ def main():
             if results:
                 df = pd.DataFrame(results)
                 
-                # Summary
+                # Summary - with safe column access
                 col1, col2, col3, col4 = st.columns(4)
-                col1.metric("🚀 突破", f"{df['is_breakout'].sum()}")
-                col2.metric("🎯 VCP", f"{df['is_vcp'].sum()}")
-                col3.metric("✅ 趨勢通過", f"{df['trend_passed'].sum()}")
-                col4.metric("📊 平均 RS", f"{df['rs_rating'].mean():.0f}")
+                col1.metric("🚀 突破", f"{df['is_breakout'].sum() if 'is_breakout' in df.columns else 0}")
+                col2.metric("🎯 VCP", f"{df['is_vcp'].sum() if 'is_vcp' in df.columns else 0}")
+                col3.metric("✅ 趨勢通過", f"{df['trend_passed'].sum() if 'trend_passed' in df.columns else 0}")
+                col4.metric("📊 平均 RS", f"{df['rs_rating'].mean():.0f}" if 'rs_rating' in df.columns else "N/A")
                 
-                # Table
+                # Table - build columns dynamically
                 st.markdown("### 📋 板塊內排名 (按 RS 排序)")
                 
-                display_df = df[['sector_rank', 'ticker', 'price', 'status', 'rs_rating', 
-                                'adr_pct', 'rsi', 'trend_score', 'earnings_warning']].copy()
-                display_df.columns = ['排名', 'Ticker', 'Price', 'Status', 'RS', 'ADR%', 'RSI', '趨勢分', '財報']
+                # Select only available columns
+                available_cols = []
+                col_mapping = {
+                    'sector_rank': '排名',
+                    'ticker': 'Ticker', 
+                    'price': 'Price',
+                    'status': 'Status',
+                    'rs_rating': 'RS',
+                    'adr_pct': 'ADR%',
+                    'rsi': 'RSI',
+                    'trend_score': '趨勢分',
+                    'earnings_warning': '財報'
+                }
                 
-                st.dataframe(
-                    display_df.style.format({
-                        'Price': '${:.2f}',
-                        'RS': '{:.0f}',
-                        'ADR%': '{:.1f}%',
-                        'RSI': '{:.0f}',
-                        '趨勢分': '{:.0f}%'
-                    }).background_gradient(subset=['RS'], cmap='RdYlGn'),
-                    use_container_width=True,
-                    hide_index=True
-                )
+                for col in col_mapping.keys():
+                    if col in df.columns:
+                        available_cols.append(col)
                 
-                # Recommendations
+                if available_cols:
+                    display_df = df[available_cols].copy()
+                    display_df.columns = [col_mapping[c] for c in available_cols]
+                    
+                    # Build format dict for available columns
+                    format_dict = {}
+                    if 'Price' in display_df.columns:
+                        format_dict['Price'] = '${:.2f}'
+                    if 'RS' in display_df.columns:
+                        format_dict['RS'] = '{:.0f}'
+                    if 'ADR%' in display_df.columns:
+                        format_dict['ADR%'] = '{:.1f}%'
+                    if 'RSI' in display_df.columns:
+                        format_dict['RSI'] = '{:.0f}'
+                    if '趨勢分' in display_df.columns:
+                        format_dict['趨勢分'] = '{:.0f}%'
+                    
+                    styled_df = display_df.style.format(format_dict)
+                    if 'RS' in display_df.columns:
+                        styled_df = styled_df.background_gradient(subset=['RS'], cmap='RdYlGn')
+                    
+                    st.dataframe(styled_df, use_container_width=True, hide_index=True)
+                
+                # Recommendations - with safe access
                 st.markdown("### 💡 建議")
-                top_picks = [r for r in results if r['rs_rating'] >= 70 and r['trend_passed'] and not r['is_overheated']]
+                top_picks = []
+                for r in results:
+                    rs = r.get('rs_rating', 0)
+                    trend = r.get('trend_passed', False)
+                    overheated = r.get('is_overheated', True)
+                    if rs >= 70 and trend and not overheated:
+                        top_picks.append(r)
                 
                 if top_picks:
                     st.success(f"**推薦關注 ({len(top_picks)} 隻):**")
                     for pick in top_picks[:3]:
-                        warn = f" ⚠️ {pick['earnings_warning']}" if pick['earnings_warning'] else ""
-                        st.write(f"• **{pick['ticker']}** - RS {pick['rs_rating']:.0f}, {pick['status']}{warn}")
+                        warn = f" ⚠️ {pick.get('earnings_warning', '')}" if pick.get('earnings_warning') else ""
+                        st.write(f"• **{pick.get('ticker', 'N/A')}** - RS {pick.get('rs_rating', 0):.0f}, {pick.get('status', '')}{warn}")
                 else:
                     st.info("目前沒有符合標準的推薦")
     
@@ -1081,20 +1112,37 @@ def main():
             
             if watchlist_data:
                 df_watch = pd.DataFrame(watchlist_data)
-                df_watch = df_watch.sort_values('rs_rating', ascending=False)
+                if 'rs_rating' in df_watch.columns:
+                    df_watch = df_watch.sort_values('rs_rating', ascending=False)
                 
-                st.dataframe(
-                    df_watch[['ticker', 'price', 'status', 'rs_rating', 'adr_pct', 
-                             'rsi', 'trend_passed', 'earnings_warning']]
-                    .rename(columns={
-                        'ticker': 'Ticker', 'price': 'Price', 'status': 'Status',
-                        'rs_rating': 'RS', 'adr_pct': 'ADR%', 'rsi': 'RSI',
-                        'trend_passed': '趨勢OK', 'earnings_warning': '財報'
-                    })
-                    .style.format({'Price': '${:.2f}', 'RS': '{:.0f}', 'ADR%': '{:.1f}%', 'RSI': '{:.0f}'}),
-                    use_container_width=True,
-                    hide_index=True
-                )
+                # Select available columns
+                display_cols = []
+                col_names = {}
+                for col, name in [('ticker', 'Ticker'), ('price', 'Price'), ('status', 'Status'),
+                                  ('rs_rating', 'RS'), ('adr_pct', 'ADR%'), ('rsi', 'RSI'),
+                                  ('trend_passed', '趨勢OK'), ('earnings_warning', '財報')]:
+                    if col in df_watch.columns:
+                        display_cols.append(col)
+                        col_names[col] = name
+                
+                if display_cols:
+                    display_df = df_watch[display_cols].rename(columns=col_names)
+                    
+                    format_dict = {}
+                    if 'Price' in display_df.columns:
+                        format_dict['Price'] = '${:.2f}'
+                    if 'RS' in display_df.columns:
+                        format_dict['RS'] = '{:.0f}'
+                    if 'ADR%' in display_df.columns:
+                        format_dict['ADR%'] = '{:.1f}%'
+                    if 'RSI' in display_df.columns:
+                        format_dict['RSI'] = '{:.0f}'
+                    
+                    st.dataframe(
+                        display_df.style.format(format_dict),
+                        use_container_width=True,
+                        hide_index=True
+                    )
         
         # Clear watchlist
         if st.button("🗑️ 清空 Watchlist"):
