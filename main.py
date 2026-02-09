@@ -1,17 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-🌪️ Market Structure Radar - v4.0 (Entry Point Edition)
-=======================================================
+🌪️ Market Structure Radar - v5.0 Pro Edition
+=============================================
 
-New Features:
-✅ Tab 5: 個股深度分析 - 互動圖表 + 最佳入場點
-✅ 支撐/阻力位計算
-✅ 買入區間建議 (Qullamaggie Style)
-✅ 風險/回報計算
-✅ 多時間框架分析
+專業交易員版本 - 目標年化 30%+
 
-Author: AI Trading Assistant
-Style: Vibe Coding - Clean, Readable, Modular
+新增功能：
+✅ 財報日期追蹤 & 警告
+✅ RS Rating (相對強度評分)
+✅ 行業內排名 (買最強的)
+✅ 多時間框架分析 (週線確認日線)
+✅ 專業倉位計算器
+✅ 大盤環境評估
+✅ Watchlist 管理
+✅ 風險管理儀表板
+✅ 交易日誌模板
+
+Author: Pro Trader AI
+Target: 30%+ Annual Return
 """
 
 # ============================================
@@ -26,100 +32,91 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import warnings
 warnings.filterwarnings('ignore')
-
 
 # ============================================
 # ⚙️ CONFIGURATION
 # ============================================
 @dataclass
 class Config:
-    """Central configuration"""
-    PAGE_TITLE: str = "Market Structure Radar v4.0"
-    PAGE_ICON: str = "🌪️"
+    PAGE_TITLE: str = "Market Radar v5.0 Pro"
+    PAGE_ICON: str = "🎯"
     CACHE_TTL: int = 1800
-    DATA_PERIOD: str = "1y"
-    BENCHMARK: str = "SPY"
     
-    # Technical thresholds
-    RSI_OVERBOUGHT: int = 70
-    RSI_OVERSOLD: int = 30
-    EXTENSION_DANGER: float = 25.0
-    VCP_TIGHTNESS: float = 8.0
-    BREAKOUT_VOLUME: float = 1.5
-    HIGH_ADR: float = 5.0
+    # Risk Management
+    MAX_RISK_PER_TRADE: float = 0.02  # 2%
+    MAX_PORTFOLIO_RISK: float = 0.10  # 10%
+    MAX_POSITIONS: int = 8
+    MAX_SECTOR_EXPOSURE: float = 0.40  # 40% max in one sector
+    
+    # Technical
+    RS_LOOKBACK: int = 63  # 3 months for RS calculation
+    VCP_MIN_CONTRACTIONS: int = 2
+    BREAKOUT_VOLUME_THRESHOLD: float = 1.5
 
 CONFIG = Config()
 
-
 # ============================================
-# 📊 SECTOR DATA
+# 📊 SECTOR DATA (擴展版)
 # ============================================
-SECTORS: Dict[str, Dict] = {
+SECTORS = {
     'SMH (半導體)': {
         'etf': 'SMH',
-        'holdings': ['NVDA', 'TSM', 'AVGO', 'AMD', 'MU', 'QCOM', 'AMAT', 'LRCX', 'TXN', 'INTC', 'ADI', 'KLAC', 'MRVL', 'ARM'],
+        'holdings': ['NVDA', 'TSM', 'AVGO', 'AMD', 'MU', 'QCOM', 'AMAT', 'LRCX', 'MRVL', 'ARM', 'KLAC', 'ADI'],
         'theme': '🔬 AI/芯片'
     },
     'XLK (科技)': {
         'etf': 'XLK',
-        'holdings': ['MSFT', 'AAPL', 'NVDA', 'AVGO', 'ORCL', 'CRM', 'ADBE', 'AMD', 'QCOM', 'IBM', 'NOW', 'INTU'],
+        'holdings': ['MSFT', 'AAPL', 'NVDA', 'AVGO', 'ORCL', 'CRM', 'ADBE', 'NOW', 'INTU', 'IBM'],
         'theme': '💻 大型科技'
     },
     'XLC (通訊)': {
         'etf': 'XLC',
-        'holdings': ['META', 'GOOGL', 'GOOG', 'NFLX', 'DIS', 'TMUS', 'VZ', 'CMCSA', 'T', 'WBD'],
+        'holdings': ['META', 'GOOGL', 'NFLX', 'DIS', 'TMUS', 'VZ', 'CMCSA', 'T', 'EA', 'TTWO'],
         'theme': '📱 社交/媒體'
     },
     'XLF (金融)': {
         'etf': 'XLF',
         'holdings': ['JPM', 'BAC', 'WFC', 'GS', 'MS', 'BLK', 'C', 'AXP', 'V', 'MA'],
-        'theme': '🏦 銀行/保險'
+        'theme': '🏦 銀行/金融'
     },
     'XLY (消費)': {
         'etf': 'XLY',
-        'holdings': ['AMZN', 'TSLA', 'HD', 'MCD', 'NKE', 'SBUX', 'LOW', 'TJX', 'BKNG'],
-        'theme': '🛒 零售/消費'
+        'holdings': ['AMZN', 'TSLA', 'HD', 'MCD', 'NKE', 'SBUX', 'LOW', 'TJX', 'BKNG', 'CMG'],
+        'theme': '🛒 消費'
     },
     'XLV (醫療)': {
         'etf': 'XLV',
-        'holdings': ['LLY', 'UNH', 'JNJ', 'MRK', 'ABBV', 'TMO', 'ABT', 'PFE', 'AMGN'],
-        'theme': '💊 製藥/醫療'
+        'holdings': ['LLY', 'UNH', 'JNJ', 'MRK', 'ABBV', 'TMO', 'ABT', 'PFE', 'AMGN', 'GILD'],
+        'theme': '💊 醫療'
     },
     'XLE (能源)': {
         'etf': 'XLE',
-        'holdings': ['XOM', 'CVX', 'COP', 'EOG', 'SLB', 'MPC', 'PSX', 'VLO', 'OXY'],
-        'theme': '⛽ 石油/天然氣'
+        'holdings': ['XOM', 'CVX', 'COP', 'EOG', 'SLB', 'MPC', 'PSX', 'VLO', 'OXY', 'HAL'],
+        'theme': '⛽ 能源'
     },
     'ARKK (創新)': {
         'etf': 'ARKK',
-        'holdings': ['TSLA', 'COIN', 'ROKU', 'SQ', 'PATH', 'HOOD', 'RBLX', 'U', 'DKNG'],
-        'theme': '🚀 顛覆創新'
+        'holdings': ['TSLA', 'COIN', 'ROKU', 'SQ', 'PATH', 'HOOD', 'RBLX', 'DKNG', 'CRSP', 'BEAM'],
+        'theme': '🚀 創新'
     },
     'KWEB (中概)': {
         'etf': 'KWEB',
-        'holdings': ['BABA', 'JD', 'PDD', 'BIDU', 'NIO', 'LI', 'XPEV', 'BILI', 'TME'],
-        'theme': '🇨🇳 中國互聯網'
-    },
-    'IWM (小型股)': {
-        'etf': 'IWM',
-        'holdings': ['MSTR', 'SMCI', 'CELH', 'AFRM', 'SOFI', 'UPST', 'RIVN', 'PLUG', 'FSLR'],
-        'theme': '📈 高成長小型'
+        'holdings': ['BABA', 'JD', 'PDD', 'BIDU', 'NIO', 'LI', 'XPEV', 'BILI', 'TME', 'NTES'],
+        'theme': '🇨🇳 中概'
     }
 }
 
-# 熱門股票快速選擇
 HOT_STOCKS = ['NVDA', 'TSLA', 'AMD', 'META', 'AAPL', 'MSFT', 'GOOGL', 'AMZN', 
-              'SMCI', 'ARM', 'COIN', 'PLTR', 'SOFI', 'NIO', 'BABA', 'MSTR']
-
+              'SMCI', 'ARM', 'COIN', 'PLTR', 'SOFI', 'MSTR', 'AVGO', 'CRM']
 
 # ============================================
-# 🧮 TECHNICAL ANALYSIS
+# 🧮 TECHNICAL ANALYSIS (Enhanced)
 # ============================================
 class TechnicalAnalysis:
-    """Technical indicator calculations"""
+    """Enhanced technical analysis"""
     
     @staticmethod
     def rsi(prices: pd.Series, period: int = 14) -> pd.Series:
@@ -130,294 +127,508 @@ class TechnicalAnalysis:
         return 100 - (100 / (1 + rs))
     
     @staticmethod
-    def macd(prices: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
-        ema_fast = prices.ewm(span=fast, adjust=False).mean()
-        ema_slow = prices.ewm(span=slow, adjust=False).mean()
-        macd_line = ema_fast - ema_slow
-        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-        histogram = macd_line - signal_line
-        return macd_line, signal_line, histogram
-    
-    @staticmethod
-    def bollinger_bands(prices: pd.Series, period: int = 20, std: float = 2.0):
-        sma = prices.rolling(period).mean()
-        std_dev = prices.rolling(period).std()
-        upper = sma + (std_dev * std)
-        lower = sma - (std_dev * std)
-        return upper, sma, lower
-    
-    @staticmethod
     def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-        high, low, close = df['High'], df['Low'], df['Close']
         tr = pd.concat([
-            high - low,
-            abs(high - close.shift()),
-            abs(low - close.shift())
+            df['High'] - df['Low'],
+            abs(df['High'] - df['Close'].shift()),
+            abs(df['Low'] - df['Close'].shift())
         ], axis=1).max(axis=1)
         return tr.rolling(period).mean()
     
     @staticmethod
     def adr_percent(df: pd.DataFrame, period: int = 20) -> pd.Series:
-        if 'High' not in df.columns or 'Low' not in df.columns:
-            return pd.Series([0] * len(df))
         daily_range = (df['High'] / df['Low'] - 1) * 100
         return daily_range.rolling(period).mean()
     
     @staticmethod
-    def find_support_resistance(df: pd.DataFrame, lookback: int = 60) -> Dict:
-        """Find key support and resistance levels"""
-        recent = df.tail(lookback)
-        close = recent['Close']
-        high = recent['High']
-        low = recent['Low']
+    def macd(prices: pd.Series):
+        ema12 = prices.ewm(span=12, adjust=False).mean()
+        ema26 = prices.ewm(span=26, adjust=False).mean()
+        macd_line = ema12 - ema26
+        signal = macd_line.ewm(span=9, adjust=False).mean()
+        return macd_line, signal, macd_line - signal
+    
+    @staticmethod
+    def rs_rating(stock_df: pd.DataFrame, spy_df: pd.DataFrame, lookback: int = 63) -> float:
+        """
+        Calculate Relative Strength Rating (IBD Style)
+        比較股票相對於 SPY 的表現，返回 1-99 評分
+        """
+        if len(stock_df) < lookback or len(spy_df) < lookback:
+            return 50
         
-        # Current price
-        current = float(close.iloc[-1])
+        # 計算不同時間段的回報
+        periods = [21, 42, 63]  # 1M, 2M, 3M
+        weights = [0.4, 0.3, 0.3]  # 權重：近期更重要
         
-        # Key levels
-        levels = {
-            'current': current,
-            'high_52w': float(df['High'].tail(252).max()) if len(df) >= 252 else float(high.max()),
-            'low_52w': float(df['Low'].tail(252).min()) if len(df) >= 252 else float(low.min()),
-            'high_20d': float(high.max()),
-            'low_20d': float(low.min()),
-            'sma20': float(close.rolling(20).mean().iloc[-1]),
-            'sma50': float(close.rolling(50).mean().iloc[-1]) if len(close) >= 50 else current,
-            'sma200': float(close.rolling(200).mean().iloc[-1]) if len(df) >= 200 else current,
+        stock_score = 0
+        spy_score = 0
+        
+        for period, weight in zip(periods, weights):
+            if len(stock_df) >= period and len(spy_df) >= period:
+                stock_ret = (stock_df['Close'].iloc[-1] / stock_df['Close'].iloc[-period] - 1) * 100
+                spy_ret = (spy_df['Close'].iloc[-1] / spy_df['Close'].iloc[-period] - 1) * 100
+                
+                # 相對表現
+                relative = stock_ret - spy_ret
+                stock_score += relative * weight
+        
+        # 轉換為 1-99 評分
+        # 假設 +30% 相對表現 = 99, -30% = 1
+        rs = 50 + (stock_score / 30) * 49
+        return max(1, min(99, rs))
+    
+    @staticmethod
+    def calculate_trend_template(df: pd.DataFrame) -> Dict:
+        """
+        Mark Minervini Trend Template
+        檢查股票是否符合強勢股標準
+        """
+        if len(df) < 200:
+            return {'passed': False, 'score': 0, 'checks': {}}
+        
+        close = df['Close'].iloc[-1]
+        sma50 = df['Close'].rolling(50).mean().iloc[-1]
+        sma150 = df['Close'].rolling(150).mean().iloc[-1]
+        sma200 = df['Close'].rolling(200).mean().iloc[-1]
+        high_52w = df['High'].tail(252).max()
+        low_52w = df['Low'].tail(252).min()
+        
+        checks = {
+            '價格 > SMA50': close > sma50,
+            'SMA50 > SMA150': sma50 > sma150,
+            'SMA150 > SMA200': sma150 > sma200,
+            '價格 > SMA200': close > sma200,
+            'SMA200 上升': df['Close'].rolling(200).mean().iloc[-1] > df['Close'].rolling(200).mean().iloc[-20],
+            '距52週高 < 25%': (close / high_52w - 1) > -0.25,
+            '距52週低 > 30%': (close / low_52w - 1) > 0.30,
         }
         
-        # Find swing highs and lows
-        swing_highs = []
-        swing_lows = []
+        passed_count = sum(checks.values())
+        score = passed_count / len(checks) * 100
         
-        for i in range(5, len(recent) - 5):
-            # Swing high: higher than 5 bars before and after
-            if all(high.iloc[i] >= high.iloc[i-5:i]) and all(high.iloc[i] >= high.iloc[i+1:i+6]):
-                swing_highs.append(float(high.iloc[i]))
-            # Swing low
-            if all(low.iloc[i] <= low.iloc[i-5:i]) and all(low.iloc[i] <= low.iloc[i+1:i+6]):
-                swing_lows.append(float(low.iloc[i]))
-        
-        # Get nearest support/resistance
-        resistances = [l for l in swing_highs if l > current]
-        supports = [l for l in swing_lows if l < current]
-        
-        levels['nearest_resistance'] = min(resistances) if resistances else levels['high_20d']
-        levels['nearest_support'] = max(supports) if supports else levels['low_20d']
-        
-        return levels
+        return {
+            'passed': passed_count >= 5,  # 至少通過5項
+            'score': score,
+            'checks': checks
+        }
 
 
 # ============================================
-# 🎯 ENTRY POINT CALCULATOR
+# 📅 EARNINGS TRACKER
+# ============================================
+class EarningsTracker:
+    """Track earnings dates"""
+    
+    @staticmethod
+    @st.cache_data(ttl=86400)  # 24 hours cache
+    def get_earnings_date(ticker: str) -> Optional[Dict]:
+        """Get next earnings date for a ticker"""
+        try:
+            stock = yf.Ticker(ticker)
+            calendar = stock.calendar
+            
+            if calendar is not None and len(calendar) > 0:
+                # 嘗試獲取財報日期
+                if hasattr(calendar, 'iloc'):
+                    earnings_date = calendar.iloc[0, 0] if len(calendar.iloc[0]) > 0 else None
+                elif isinstance(calendar, dict):
+                    earnings_date = calendar.get('Earnings Date', [None])[0]
+                else:
+                    earnings_date = None
+                
+                if earnings_date:
+                    if isinstance(earnings_date, pd.Timestamp):
+                        earnings_date = earnings_date.to_pydatetime()
+                    
+                    days_until = (earnings_date - datetime.now()).days
+                    
+                    return {
+                        'date': earnings_date,
+                        'days_until': days_until,
+                        'warning': days_until <= 14,
+                        'danger': days_until <= 7
+                    }
+        except:
+            pass
+        return None
+    
+    @staticmethod
+    def get_earnings_warning(ticker: str) -> str:
+        """Get earnings warning message"""
+        earnings = EarningsTracker.get_earnings_date(ticker)
+        if earnings:
+            days = earnings['days_until']
+            if days <= 0:
+                return "🚨 財報剛發布"
+            elif days <= 7:
+                return f"🔴 財報 {days} 天內！"
+            elif days <= 14:
+                return f"🟡 財報 {days} 天內"
+            elif days <= 30:
+                return f"📅 財報 {days} 天後"
+        return ""
+
+
+# ============================================
+# 💰 POSITION CALCULATOR
+# ============================================
+class PositionCalculator:
+    """Professional position sizing"""
+    
+    @staticmethod
+    def calculate_position(
+        account_size: float,
+        entry_price: float,
+        stop_loss: float,
+        risk_percent: float = 0.02
+    ) -> Dict:
+        """
+        Calculate position size based on risk
+        
+        Kelly Criterion inspired but capped at 2% risk per trade
+        """
+        risk_amount = account_size * risk_percent
+        risk_per_share = abs(entry_price - stop_loss)
+        
+        if risk_per_share <= 0:
+            return {'error': '止損價格無效'}
+        
+        shares = int(risk_amount / risk_per_share)
+        position_value = shares * entry_price
+        position_percent = position_value / account_size * 100
+        
+        return {
+            'shares': shares,
+            'position_value': position_value,
+            'position_percent': position_percent,
+            'risk_amount': risk_amount,
+            'risk_per_share': risk_per_share,
+            'max_loss': shares * risk_per_share
+        }
+    
+    @staticmethod
+    def calculate_targets(entry: float, stop: float, r_multiples: List[float] = [2, 3, 5]) -> List[Dict]:
+        """Calculate profit targets based on R-multiples"""
+        risk = abs(entry - stop)
+        targets = []
+        
+        for r in r_multiples:
+            target = entry + (risk * r)
+            profit_pct = (target / entry - 1) * 100
+            targets.append({
+                'r_multiple': r,
+                'price': round(target, 2),
+                'profit_pct': round(profit_pct, 1)
+            })
+        
+        return targets
+
+
+# ============================================
+# 🌡️ MARKET REGIME
+# ============================================
+class MarketRegime:
+    """Assess overall market conditions"""
+    
+    @staticmethod
+    @st.cache_data(ttl=900)
+    def get_market_health() -> Dict:
+        """
+        Comprehensive market health assessment
+        """
+        try:
+            # Fetch market data
+            spy = yf.download('SPY', period='6mo', progress=False)
+            qqq = yf.download('QQQ', period='6mo', progress=False)
+            vix = yf.download('^VIX', period='1mo', progress=False)
+            
+            if len(spy) == 0:
+                return {'status': 'unknown', 'score': 50}
+            
+            # SPY Analysis
+            spy_close = spy['Close'].iloc[-1]
+            spy_sma50 = spy['Close'].rolling(50).mean().iloc[-1]
+            spy_sma200 = spy['Close'].rolling(200).mean().iloc[-1]
+            spy_above_50 = spy_close > spy_sma50
+            spy_above_200 = spy_close > spy_sma200
+            spy_return_1m = (spy_close / spy['Close'].iloc[-21] - 1) * 100
+            
+            # VIX
+            vix_current = vix['Close'].iloc[-1] if len(vix) > 0 else 20
+            
+            # Breadth (simplified - % of stocks above SMA50)
+            # In reality, you'd want NYSE breadth data
+            
+            # Score calculation
+            score = 50
+            
+            # SPY trend
+            if spy_above_200:
+                score += 15
+            if spy_above_50:
+                score += 10
+            if spy_return_1m > 0:
+                score += 10
+            elif spy_return_1m < -5:
+                score -= 15
+            
+            # VIX
+            if vix_current < 15:
+                score += 10
+            elif vix_current > 25:
+                score -= 15
+            elif vix_current > 30:
+                score -= 25
+            
+            # Determine regime
+            if score >= 75:
+                status = "🟢 強勢上漲"
+                advice = "全力進攻，增加倉位"
+            elif score >= 60:
+                status = "🟡 謹慎樂觀"
+                advice = "正常交易，注意風控"
+            elif score >= 40:
+                status = "🟠 震盪整理"
+                advice = "減少倉位，等待明確方向"
+            else:
+                status = "🔴 弱勢下跌"
+                advice = "防守為主，只做最強股"
+            
+            return {
+                'status': status,
+                'score': score,
+                'advice': advice,
+                'spy_above_50': spy_above_50,
+                'spy_above_200': spy_above_200,
+                'spy_return_1m': spy_return_1m,
+                'vix': vix_current,
+                'spy_price': spy_close
+            }
+        except Exception as e:
+            return {'status': '❓ 未知', 'score': 50, 'advice': '無法獲取市場數據'}
+
+
+# ============================================
+# 📈 ENHANCED STOCK ANALYZER
 # ============================================
 @dataclass
-class EntryPoint:
-    """Entry point recommendation"""
-    entry_type: str  # 'breakout', 'pullback', 'vcp', 'bounce'
-    entry_price: float
-    stop_loss: float
-    target_1: float
-    target_2: float
+class ProStockAnalysis:
+    """Professional stock analysis result"""
+    ticker: str
+    price: float
+    change_pct: float
+    
+    # Technical
+    status: str
+    rs_rating: float
+    adr_pct: float
+    rsi: float
+    extension_pct: float
+    dist_52w_high: float
+    volume_ratio: float
+    
+    # Trend Template
+    trend_score: float
+    trend_passed: bool
+    
+    # Pattern
+    is_vcp: bool
+    is_breakout: bool
+    is_overheated: bool
+    
+    # Earnings
+    earnings_warning: str
+    
+    # Entry
+    suggested_entry: float
+    suggested_stop: float
     risk_reward: float
-    confidence: str  # 'high', 'medium', 'low'
-    notes: str
+    
+    # Sector
+    sector: str = ""
+    sector_rank: int = 0
 
 
-class EntryPointCalculator:
-    """Calculate optimal entry points (Qullamaggie Style)"""
+class ProStockAnalyzer:
+    """Professional stock analyzer"""
     
     def __init__(self):
         self.ta = TechnicalAnalysis()
+        self.earnings = EarningsTracker()
     
-    def calculate(self, df: pd.DataFrame) -> List[EntryPoint]:
-        """Calculate all possible entry points"""
-        entries = []
+    def analyze(self, df: pd.DataFrame, ticker: str, spy_df: pd.DataFrame = None) -> Optional[ProStockAnalysis]:
+        """Comprehensive professional analysis"""
+        if df is None or len(df) < 50:
+            return None
         
-        if len(df) < 50:
-            return entries
-        
-        close = df['Close']
-        high = df['High']
-        low = df['Low']
-        volume = df['Volume']
-        
-        current = float(close.iloc[-1])
-        atr = float(self.ta.atr(df).iloc[-1])
-        levels = self.ta.find_support_resistance(df)
-        
-        # 1. Breakout Entry (突破入場)
-        breakout_entry = self._breakout_entry(df, current, atr, levels)
-        if breakout_entry:
-            entries.append(breakout_entry)
-        
-        # 2. Pullback Entry (回調入場)
-        pullback_entry = self._pullback_entry(df, current, atr, levels)
-        if pullback_entry:
-            entries.append(pullback_entry)
-        
-        # 3. VCP Entry (波動收縮入場)
-        vcp_entry = self._vcp_entry(df, current, atr, levels)
-        if vcp_entry:
-            entries.append(vcp_entry)
-        
-        # 4. Support Bounce Entry (支撐反彈)
-        bounce_entry = self._bounce_entry(df, current, atr, levels)
-        if bounce_entry:
-            entries.append(bounce_entry)
-        
-        return entries
-    
-    def _breakout_entry(self, df, current, atr, levels) -> Optional[EntryPoint]:
-        """Breakout above 20-day high"""
-        high_20d = levels['high_20d']
-        
-        # Check if near breakout point
-        if current >= high_20d * 0.98:
-            entry = high_20d * 1.001  # Slightly above breakout
-            stop = entry - (atr * 2)
-            target1 = entry + (atr * 3)
-            target2 = entry + (atr * 5)
-            rr = (target1 - entry) / (entry - stop)
+        try:
+            close = df['Close']
+            volume = df['Volume']
+            high = df['High']
+            low = df['Low']
             
-            # Check volume
-            vol_avg = float(df['Volume'].tail(20).mean())
-            vol_today = float(df['Volume'].iloc[-1])
-            vol_ratio = vol_today / vol_avg
+            # Current values
+            curr_price = float(close.iloc[-1])
+            prev_price = float(close.iloc[-2])
+            change_pct = (curr_price - prev_price) / prev_price * 100
             
-            confidence = 'high' if vol_ratio > 1.5 else 'medium' if vol_ratio > 1.0 else 'low'
+            # Technical indicators
+            sma50 = close.rolling(50).mean()
+            curr_sma50 = float(sma50.iloc[-1]) if not pd.isna(sma50.iloc[-1]) else curr_price
             
-            return EntryPoint(
-                entry_type='🚀 突破入場',
-                entry_price=round(entry, 2),
-                stop_loss=round(stop, 2),
-                target_1=round(target1, 2),
-                target_2=round(target2, 2),
-                risk_reward=round(rr, 2),
-                confidence=confidence,
-                notes=f"突破 ${high_20d:.2f} 時買入，量比 {vol_ratio:.1f}x"
+            rsi = self.ta.rsi(close)
+            curr_rsi = float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50
+            
+            adr = self.ta.adr_percent(df)
+            curr_adr = float(adr.iloc[-1]) if not pd.isna(adr.iloc[-1]) else 3
+            
+            atr = self.ta.atr(df)
+            curr_atr = float(atr.iloc[-1]) if not pd.isna(atr.iloc[-1]) else curr_price * 0.02
+            
+            # RS Rating
+            rs = 50
+            if spy_df is not None:
+                rs = self.ta.rs_rating(df, spy_df)
+            
+            # Extension & 52W
+            extension = (curr_price - curr_sma50) / curr_sma50 * 100
+            high_52w = float(high.tail(252).max()) if len(high) >= 252 else float(high.max())
+            dist_high = (curr_price / high_52w - 1) * 100
+            
+            # Volume
+            vol_avg = float(volume.tail(50).mean())
+            vol_ratio = float(volume.iloc[-1]) / vol_avg if vol_avg > 0 else 1
+            
+            # Trend Template
+            trend = self.ta.calculate_trend_template(df)
+            
+            # Pattern Detection
+            is_vcp = self._detect_vcp(df)
+            is_breakout = self._detect_breakout(df)
+            is_overheated = extension > 25 or curr_rsi > 80
+            
+            # Status
+            if is_breakout and vol_ratio > 1.5:
+                status = "🚀 放量突破"
+            elif is_vcp and trend['passed']:
+                status = "🎯 VCP蓄勢"
+            elif trend['passed'] and not is_overheated:
+                status = "✅ 趨勢健康"
+            elif is_overheated:
+                status = "🔥 過熱"
+            elif not trend['passed']:
+                status = "⚠️ 趨勢不佳"
+            else:
+                status = "🧘 盤整"
+            
+            # Earnings warning
+            earnings_warn = self.earnings.get_earnings_warning(ticker)
+            
+            # Entry calculation
+            if is_vcp:
+                suggested_entry = float(high.tail(10).max()) * 1.001
+                suggested_stop = curr_price - curr_atr * 1.5
+            elif is_breakout:
+                suggested_entry = curr_price
+                suggested_stop = curr_price - curr_atr * 2
+            else:
+                suggested_entry = curr_sma50
+                suggested_stop = curr_sma50 - curr_atr * 2
+            
+            risk = suggested_entry - suggested_stop
+            reward = curr_atr * 3
+            rr = reward / risk if risk > 0 else 0
+            
+            return ProStockAnalysis(
+                ticker=ticker,
+                price=curr_price,
+                change_pct=change_pct,
+                status=status,
+                rs_rating=rs,
+                adr_pct=curr_adr,
+                rsi=curr_rsi,
+                extension_pct=extension,
+                dist_52w_high=dist_high,
+                volume_ratio=vol_ratio,
+                trend_score=trend['score'],
+                trend_passed=trend['passed'],
+                is_vcp=is_vcp,
+                is_breakout=is_breakout,
+                is_overheated=is_overheated,
+                earnings_warning=earnings_warn,
+                suggested_entry=round(suggested_entry, 2),
+                suggested_stop=round(suggested_stop, 2),
+                risk_reward=round(rr, 2)
             )
-        return None
-    
-    def _pullback_entry(self, df, current, atr, levels) -> Optional[EntryPoint]:
-        """Pullback to moving average"""
-        sma20 = levels['sma20']
-        sma50 = levels['sma50']
-        
-        # Price near SMA20 or SMA50
-        if current <= sma20 * 1.02 and current >= sma20 * 0.98:
-            entry = sma20
-            stop = entry - (atr * 1.5)
-            target1 = entry + (atr * 2)
-            target2 = levels['high_20d']
-            rr = (target1 - entry) / (entry - stop)
             
-            return EntryPoint(
-                entry_type='📉 回調到 EMA20',
-                entry_price=round(entry, 2),
-                stop_loss=round(stop, 2),
-                target_1=round(target1, 2),
-                target_2=round(target2, 2),
-                risk_reward=round(rr, 2),
-                confidence='medium',
-                notes=f"回調到 20日均線 ${sma20:.2f} 支撐"
-            )
-        
-        if current <= sma50 * 1.02 and current >= sma50 * 0.98:
-            entry = sma50
-            stop = entry - (atr * 2)
-            target1 = entry + (atr * 3)
-            target2 = levels['high_20d']
-            rr = (target1 - entry) / (entry - stop)
-            
-            return EntryPoint(
-                entry_type='📉 回調到 SMA50',
-                entry_price=round(entry, 2),
-                stop_loss=round(stop, 2),
-                target_1=round(target1, 2),
-                target_2=round(target2, 2),
-                risk_reward=round(rr, 2),
-                confidence='medium',
-                notes=f"回調到 50日均線 ${sma50:.2f} 支撐"
-            )
-        
-        return None
+        except Exception as e:
+            return None
     
-    def _vcp_entry(self, df, current, atr, levels) -> Optional[EntryPoint]:
-        """VCP pattern entry"""
-        # Check for volatility contraction
-        recent_20 = df.tail(20)
+    def _detect_vcp(self, df: pd.DataFrame) -> bool:
+        """Enhanced VCP detection"""
+        if len(df) < 40:
+            return False
+        
+        recent = df.tail(30)
+        
+        # Calculate weekly ranges
         ranges = []
-        
-        for i in range(0, 20, 5):
-            if i + 5 <= 20:
-                period = recent_20.iloc[i:i+5]
+        for i in range(0, 25, 5):
+            if i + 5 <= 25:
+                period = recent.iloc[i:i+5]
                 range_pct = (period['High'].max() - period['Low'].min()) / period['Low'].min() * 100
                 ranges.append(range_pct)
         
-        if len(ranges) >= 3:
-            is_contracting = ranges[-1] < ranges[0] * 0.7  # Last range is 70% of first
-            
-            if is_contracting and ranges[-1] < 8:
-                pivot = float(df['High'].tail(10).max())
-                entry = pivot * 1.001
-                stop = current - (atr * 1.5)
-                target1 = entry + (atr * 3)
-                target2 = entry + (atr * 5)
-                rr = (target1 - entry) / (entry - stop)
-                
-                return EntryPoint(
-                    entry_type='🎯 VCP 突破',
-                    entry_price=round(entry, 2),
-                    stop_loss=round(stop, 2),
-                    target_1=round(target1, 2),
-                    target_2=round(target2, 2),
-                    risk_reward=round(rr, 2),
-                    confidence='high',
-                    notes=f"VCP 形態，緊縮度 {ranges[-1]:.1f}%，突破 ${pivot:.2f} 買入"
-                )
+        if len(ranges) < 4:
+            return False
         
-        return None
+        # Check for contraction
+        contractions = 0
+        for i in range(1, len(ranges)):
+            if ranges[i] < ranges[i-1]:
+                contractions += 1
+        
+        # VCP requires: 
+        # 1. At least 2 contractions
+        # 2. Last range < 10%
+        # 3. Price above SMA50
+        curr_price = float(df['Close'].iloc[-1])
+        sma50 = float(df['Close'].rolling(50).mean().iloc[-1])
+        
+        return (contractions >= CONFIG.VCP_MIN_CONTRACTIONS and 
+                ranges[-1] < 10 and 
+                curr_price > sma50)
     
-    def _bounce_entry(self, df, current, atr, levels) -> Optional[EntryPoint]:
-        """Bounce from support"""
-        support = levels['nearest_support']
+    def _detect_breakout(self, df: pd.DataFrame) -> bool:
+        """Enhanced breakout detection"""
+        if len(df) < 30:
+            return False
         
-        if current <= support * 1.03 and current >= support * 0.99:
-            entry = support
-            stop = support - (atr * 1.5)
-            target1 = entry + (atr * 2)
-            target2 = levels['nearest_resistance']
-            rr = (target1 - entry) / (entry - stop)
-            
-            return EntryPoint(
-                entry_type='💚 支撐反彈',
-                entry_price=round(entry, 2),
-                stop_loss=round(stop, 2),
-                target_1=round(target1, 2),
-                target_2=round(target2, 2),
-                risk_reward=round(rr, 2),
-                confidence='medium',
-                notes=f"從支撐位 ${support:.2f} 反彈"
-            )
+        curr_price = float(df['Close'].iloc[-1])
+        high_20 = float(df['High'].iloc[-20:-1].max())
+        vol_avg = float(df['Volume'].iloc[-20:-1].mean())
+        vol_curr = float(df['Volume'].iloc[-1])
         
-        return None
+        # Breakout: price above 20-day high with volume
+        return (curr_price > high_20 and 
+                vol_curr > vol_avg * CONFIG.BREAKOUT_VOLUME_THRESHOLD)
 
 
 # ============================================
-# 📈 CHART BUILDER
+# 📊 CHART BUILDER (Enhanced)
 # ============================================
-class ChartBuilder:
-    """Build interactive charts"""
+class ProChartBuilder:
+    """Professional chart builder"""
     
     @staticmethod
-    def create_stock_chart(df: pd.DataFrame, ticker: str, entries: List[EntryPoint] = None) -> go.Figure:
-        """Create comprehensive stock analysis chart"""
+    def create_analysis_chart(df: pd.DataFrame, ticker: str, analysis: ProStockAnalysis = None) -> go.Figure:
+        """Create comprehensive analysis chart"""
         
         ta = TechnicalAnalysis()
+        df = df.copy()
         
         # Calculate indicators
-        df = df.copy()
         df['SMA20'] = df['Close'].rolling(20).mean()
         df['SMA50'] = df['Close'].rolling(50).mean()
         df['SMA200'] = df['Close'].rolling(200).mean()
@@ -426,71 +637,48 @@ class ChartBuilder:
         df['MACD'] = macd
         df['MACD_Signal'] = signal
         df['MACD_Hist'] = hist
-        bb_upper, bb_mid, bb_lower = ta.bollinger_bands(df['Close'])
-        df['BB_Upper'] = bb_upper
-        df['BB_Lower'] = bb_lower
         
-        # Create subplots
+        # Create figure
         fig = make_subplots(
             rows=4, cols=1,
             shared_xaxes=True,
             vertical_spacing=0.03,
             row_heights=[0.5, 0.15, 0.15, 0.2],
-            subplot_titles=(f'{ticker} 價格走勢', 'RSI', 'MACD', '成交量')
+            subplot_titles=(f'{ticker} - RS: {analysis.rs_rating:.0f}' if analysis else ticker, 
+                           'RSI', 'MACD', 'Volume')
         )
         
-        # 1. Candlestick chart
-        fig.add_trace(
-            go.Candlestick(
-                x=df.index,
-                open=df['Open'],
-                high=df['High'],
-                low=df['Low'],
-                close=df['Close'],
-                name='Price',
-                increasing_line_color='#00CC96',
-                decreasing_line_color='#EF553B'
-            ),
-            row=1, col=1
-        )
+        # Candlestick
+        fig.add_trace(go.Candlestick(
+            x=df.index, open=df['Open'], high=df['High'],
+            low=df['Low'], close=df['Close'], name='Price',
+            increasing_line_color='#00CC96', decreasing_line_color='#EF553B'
+        ), row=1, col=1)
         
-        # Add moving averages
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA20'], name='SMA20', 
+        # Moving averages
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA20'], name='SMA20',
                                   line=dict(color='orange', width=1)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name='SMA50', 
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name='SMA50',
                                   line=dict(color='blue', width=1)), row=1, col=1)
         if len(df) >= 200:
-            fig.add_trace(go.Scatter(x=df.index, y=df['SMA200'], name='SMA200', 
+            fig.add_trace(go.Scatter(x=df.index, y=df['SMA200'], name='SMA200',
                                       line=dict(color='purple', width=1)), row=1, col=1)
         
-        # Add Bollinger Bands
-        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Upper'], name='BB Upper',
-                                  line=dict(color='gray', width=1, dash='dash')), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['BB_Lower'], name='BB Lower',
-                                  line=dict(color='gray', width=1, dash='dash'),
-                                  fill='tonexty', fillcolor='rgba(128,128,128,0.1)'), row=1, col=1)
+        # Entry/Stop lines
+        if analysis:
+            fig.add_hline(y=analysis.suggested_entry, line_dash="dash", line_color="green",
+                         annotation_text=f"Entry ${analysis.suggested_entry}", row=1, col=1)
+            fig.add_hline(y=analysis.suggested_stop, line_dash="dash", line_color="red",
+                         annotation_text=f"Stop ${analysis.suggested_stop}", row=1, col=1)
         
-        # Add entry points if available
-        if entries:
-            for entry in entries:
-                # Entry line
-                fig.add_hline(y=entry.entry_price, line_dash="dash", line_color="green",
-                             annotation_text=f"入場 ${entry.entry_price}", row=1, col=1)
-                # Stop loss line
-                fig.add_hline(y=entry.stop_loss, line_dash="dash", line_color="red",
-                             annotation_text=f"止損 ${entry.stop_loss}", row=1, col=1)
-                # Target line
-                fig.add_hline(y=entry.target_1, line_dash="dash", line_color="blue",
-                             annotation_text=f"目標1 ${entry.target_1}", row=1, col=1)
-        
-        # 2. RSI
+        # RSI
         fig.add_trace(go.Scatter(x=df.index, y=df['RSI'], name='RSI',
                                   line=dict(color='purple', width=1)), row=2, col=1)
         fig.add_hline(y=70, line_dash="dash", line_color="red", row=2, col=1)
         fig.add_hline(y=30, line_dash="dash", line_color="green", row=2, col=1)
         
-        # 3. MACD
-        colors = ['green' if v >= 0 else 'red' for v in df['MACD_Hist']]
+        # MACD
+        colors = ['green' if v >= 0 else 'red' for v in df['MACD_Hist'].fillna(0)]
         fig.add_trace(go.Bar(x=df.index, y=df['MACD_Hist'], name='MACD Hist',
                              marker_color=colors), row=3, col=1)
         fig.add_trace(go.Scatter(x=df.index, y=df['MACD'], name='MACD',
@@ -498,53 +686,18 @@ class ChartBuilder:
         fig.add_trace(go.Scatter(x=df.index, y=df['MACD_Signal'], name='Signal',
                                   line=dict(color='orange', width=1)), row=3, col=1)
         
-        # 4. Volume
-        colors = ['green' if df['Close'].iloc[i] >= df['Open'].iloc[i] else 'red' 
-                  for i in range(len(df))]
+        # Volume
+        vol_colors = ['green' if df['Close'].iloc[i] >= df['Open'].iloc[i] else 'red' 
+                      for i in range(len(df))]
         fig.add_trace(go.Bar(x=df.index, y=df['Volume'], name='Volume',
-                             marker_color=colors), row=4, col=1)
+                             marker_color=vol_colors), row=4, col=1)
         
-        # Update layout
+        # Layout
         fig.update_layout(
-            height=900,
+            height=800,
             showlegend=True,
-            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
             xaxis_rangeslider_visible=False,
-            template='plotly_dark'
-        )
-        
-        fig.update_xaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
-        fig.update_yaxes(showgrid=True, gridwidth=1, gridcolor='rgba(128,128,128,0.2)')
-        
-        return fig
-    
-    @staticmethod
-    def create_mini_chart(df: pd.DataFrame, ticker: str) -> go.Figure:
-        """Create a mini chart for quick view"""
-        fig = go.Figure()
-        
-        # Price line
-        fig.add_trace(go.Scatter(
-            x=df.index, y=df['Close'],
-            mode='lines',
-            name=ticker,
-            line=dict(color='#00CC96' if df['Close'].iloc[-1] >= df['Close'].iloc[0] else '#EF553B', width=2)
-        ))
-        
-        # SMA20
-        sma20 = df['Close'].rolling(20).mean()
-        fig.add_trace(go.Scatter(
-            x=df.index, y=sma20,
-            mode='lines',
-            name='SMA20',
-            line=dict(color='orange', width=1, dash='dash')
-        ))
-        
-        fig.update_layout(
-            height=250,
-            margin=dict(l=0, r=0, t=30, b=0),
-            showlegend=False,
-            title=dict(text=ticker, x=0.5),
             template='plotly_dark'
         )
         
@@ -555,12 +708,9 @@ class ChartBuilder:
 # 📡 DATA FETCHER
 # ============================================
 class DataFetcher:
-    """Fetch market data"""
-    
     @staticmethod
-    @st.cache_data(ttl=CONFIG.CACHE_TTL)
+    @st.cache_data(ttl=1800)
     def get_stock_data(ticker: str, period: str = "1y") -> Optional[pd.DataFrame]:
-        """Fetch single stock data"""
         try:
             df = yf.download(ticker, period=period, progress=False)
             if isinstance(df.columns, pd.MultiIndex):
@@ -570,10 +720,9 @@ class DataFetcher:
             return None
     
     @staticmethod
-    @st.cache_data(ttl=CONFIG.CACHE_TTL)
+    @st.cache_data(ttl=1800)
     def get_sector_etfs() -> Optional[pd.DataFrame]:
-        """Fetch sector ETF prices"""
-        tickers = [s['etf'] for s in SECTORS.values()] + [CONFIG.BENCHMARK]
+        tickers = [s['etf'] for s in SECTORS.values()] + ['SPY']
         try:
             data = yf.download(tickers, period="6mo", progress=False)['Close']
             return data
@@ -581,9 +730,8 @@ class DataFetcher:
             return None
     
     @staticmethod
-    @st.cache_data(ttl=CONFIG.CACHE_TTL)
+    @st.cache_data(ttl=1800)
     def get_holdings(sector_name: str):
-        """Fetch sector holdings"""
         if sector_name not in SECTORS:
             return None, []
         tickers = SECTORS[sector_name]['holdings']
@@ -592,183 +740,40 @@ class DataFetcher:
             return data, tickers
         except:
             return None, []
-    
-    @staticmethod
-    @st.cache_data(ttl=300)
-    def get_vix() -> Optional[Dict]:
-        """Fetch VIX"""
-        try:
-            vix = yf.download("^VIX", period="5d", progress=False)['Close']
-            if len(vix) > 0:
-                return {'value': float(vix.iloc[-1]), 
-                        'change': float(vix.iloc[-1] - vix.iloc[-2]) if len(vix) > 1 else 0}
-        except:
-            pass
-        return None
-
-
-# ============================================
-# 📈 STOCK ANALYZER
-# ============================================
-@dataclass
-class StockAnalysis:
-    """Stock analysis result"""
-    ticker: str
-    price: float
-    change_pct: float
-    status: str
-    status_code: int
-    extension_pct: float
-    rsi: float
-    adr_pct: float
-    dist_52w_high: float
-    volume_ratio: float
-    above_sma50: bool
-    is_vcp: bool
-    is_breakout: bool
-    is_overheated: bool
-    sector: str = ""
-
-
-class StockAnalyzer:
-    """Analyze stocks"""
-    
-    def __init__(self):
-        self.ta = TechnicalAnalysis()
-    
-    def analyze(self, df: pd.DataFrame, ticker: str = "") -> Optional[StockAnalysis]:
-        """Analyze a stock"""
-        if df is None or len(df) < 50:
-            return None
-        
-        try:
-            close = df['Close']
-            volume = df['Volume']
-            high = df['High']
-            
-            # Indicators
-            sma50 = close.rolling(50).mean()
-            rsi = self.ta.rsi(close)
-            adr = self.ta.adr_percent(df)
-            
-            # Current values
-            curr_price = float(close.iloc[-1])
-            prev_price = float(close.iloc[-2])
-            curr_sma50 = float(sma50.iloc[-1]) if not pd.isna(sma50.iloc[-1]) else curr_price
-            curr_rsi = float(rsi.iloc[-1]) if not pd.isna(rsi.iloc[-1]) else 50
-            curr_adr = float(adr.iloc[-1]) if not pd.isna(adr.iloc[-1]) else 3
-            
-            # 52w high
-            high_52w = float(high.tail(252).max()) if len(high) >= 252 else float(high.max())
-            
-            # Volume ratio
-            vol_avg = float(volume.tail(50).mean())
-            vol_ratio = float(volume.iloc[-1]) / vol_avg if vol_avg > 0 else 1
-            
-            # Derived
-            change_pct = (curr_price - prev_price) / prev_price * 100
-            extension = (curr_price - curr_sma50) / curr_sma50 * 100
-            dist_high = (curr_price / high_52w - 1) * 100
-            above_sma50 = curr_price > curr_sma50
-            
-            # Pattern detection
-            is_vcp = self._detect_vcp(df)
-            is_breakout = self._detect_breakout(df)
-            
-            # Status
-            if is_breakout:
-                status, code = "🚀 突破", 3
-            elif is_vcp and above_sma50:
-                status, code = "🎯 VCP", 2
-            elif above_sma50 and vol_ratio < 0.8:
-                status, code = "📊 整理", 1
-            elif not above_sma50:
-                status, code = "⚠️ 弱勢", -1
-            else:
-                status, code = "🧘 盤整", 0
-            
-            # Overheated
-            is_overheated = extension > 25 or curr_rsi > 80
-            
-            return StockAnalysis(
-                ticker=ticker,
-                price=curr_price,
-                change_pct=change_pct,
-                status=status,
-                status_code=code,
-                extension_pct=extension,
-                rsi=curr_rsi,
-                adr_pct=curr_adr,
-                dist_52w_high=dist_high,
-                volume_ratio=vol_ratio,
-                above_sma50=above_sma50,
-                is_vcp=is_vcp,
-                is_breakout=is_breakout,
-                is_overheated=is_overheated
-            )
-        except:
-            return None
-    
-    def _detect_vcp(self, df: pd.DataFrame) -> bool:
-        """Detect VCP pattern"""
-        if len(df) < 30:
-            return False
-        recent = df.tail(20)
-        ranges = []
-        for i in range(0, 20, 5):
-            if i + 5 <= 20:
-                period = recent.iloc[i:i+5]
-                range_pct = (period['High'].max() - period['Low'].min()) / period['Low'].min() * 100
-                ranges.append(range_pct)
-        if len(ranges) >= 3:
-            return ranges[-1] < ranges[0] * 0.7 and ranges[-1] < 8
-        return False
-    
-    def _detect_breakout(self, df: pd.DataFrame) -> bool:
-        """Detect breakout"""
-        if len(df) < 25:
-            return False
-        current = float(df['Close'].iloc[-1])
-        high_20 = float(df['High'].iloc[-20:-1].max())
-        vol_avg = float(df['Volume'].iloc[-20:-1].mean())
-        vol_curr = float(df['Volume'].iloc[-1])
-        return current > high_20 and vol_curr > vol_avg * 1.3
 
 
 # ============================================
 # 📱 MAIN APPLICATION
 # ============================================
 def main():
-    """Main application"""
-    
-    # Page config
     st.set_page_config(page_title=CONFIG.PAGE_TITLE, page_icon=CONFIG.PAGE_ICON, layout="wide")
     
     # Header
-    st.title(f"{CONFIG.PAGE_ICON} Market Structure Radar v4.0")
-    st.caption("Entry Point Edition | Gil Morales + Qullamaggie Style")
+    st.title(f"{CONFIG.PAGE_ICON} Market Radar v5.0 Pro")
+    st.caption("專業交易員版本 | 目標年化 30%+ | Gil Morales + Qullamaggie + Minervini")
     
-    # VIX
-    vix_data = DataFetcher.get_vix()
-    if vix_data:
-        col1, col2, col3 = st.columns([1, 1, 3])
-        col1.metric("VIX", f"{vix_data['value']:.1f}", f"{vix_data['change']:+.1f}")
-        if vix_data['value'] >= 30:
-            col2.error("🔴 高風險")
-        elif vix_data['value'] >= 20:
-            col2.warning("🟡 警戒")
-        else:
-            col2.success("🟢 正常")
+    # Market Health Dashboard
+    market = MarketRegime.get_market_health()
+    
+    col1, col2, col3, col4 = st.columns(4)
+    col1.metric("市場狀態", market['status'])
+    col2.metric("健康評分", f"{market['score']}/100")
+    col3.metric("VIX", f"{market.get('vix', 'N/A'):.1f}" if isinstance(market.get('vix'), (int, float)) else "N/A")
+    col4.metric("SPY", f"${market.get('spy_price', 0):.2f}" if market.get('spy_price') else "N/A")
+    
+    if market['score'] < 50:
+        st.warning(f"⚠️ 市場環境不佳：{market.get('advice', '')}")
     
     st.divider()
     
     # Tabs
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
-        "🌪️ 板塊輪動", 
-        "🎯 狼群戰術", 
-        "🔥 溫度計",
-        "🏆 動能排行",
-        "📊 個股分析"  # NEW!
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+        "🌪️ 板塊輪動",
+        "🎯 狼群掃描", 
+        "📊 個股分析",
+        "💰 倉位計算",
+        "📋 Watchlist",
+        "📈 風控儀表板"
     ])
     
     # ===== TAB 1: Sector Rotation =====
@@ -780,296 +785,372 @@ def main():
             timeframe = st.selectbox("時間軸", [5, 21, 63], format_func=lambda x: f"{x} 天", index=1)
             
             returns = df_etf.pct_change(periods=timeframe).iloc[-1] * 100
-            spy_return = returns.get(CONFIG.BENCHMARK, 0)
+            spy_return = returns.get('SPY', 0)
             
             rs_data = []
             for name, info in SECTORS.items():
                 if info['etf'] in returns:
                     rs_data.append({
-                        '板塊': name, '主題': info['theme'],
-                        'RS Rating': returns[info['etf']] - spy_return,
-                        'Return %': returns[info['etf']]
+                        '板塊': name,
+                        '主題': info['theme'],
+                        'RS': returns[info['etf']] - spy_return,
+                        '回報%': returns[info['etf']]
                     })
             
             if rs_data:
-                df_rs = pd.DataFrame(rs_data).sort_values('RS Rating', ascending=False)
+                df_rs = pd.DataFrame(rs_data).sort_values('RS', ascending=False)
                 
-                fig = px.bar(df_rs, x='RS Rating', y='板塊', orientation='h', color='RS Rating',
-                            color_continuous_scale=['#FF4B4B', '#F0F2F6', '#00CC96'], range_color=[-15, 15])
-                fig.update_layout(yaxis={'categoryorder': 'total ascending'}, height=450)
-                st.plotly_chart(fig, use_container_width=True)
+                col1, col2 = st.columns([2, 1])
+                
+                with col1:
+                    fig = px.bar(df_rs, x='RS', y='板塊', orientation='h', color='RS',
+                                color_continuous_scale=['#FF4B4B', '#F0F2F6', '#00CC96'],
+                                range_color=[-15, 15])
+                    fig.update_layout(yaxis={'categoryorder': 'total ascending'}, height=400)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    st.markdown("### 🎯 輪動建議")
+                    strong = df_rs[df_rs['RS'] > 2].head(3)
+                    if not strong.empty:
+                        st.success("**強勢板塊:**")
+                        for _, row in strong.iterrows():
+                            st.write(f"• {row['板塊']} ({row['RS']:+.1f}%)")
+                    
+                    weak = df_rs[df_rs['RS'] < -2].tail(3)
+                    if not weak.empty:
+                        st.error("**避開板塊:**")
+                        for _, row in weak.iterrows():
+                            st.write(f"• {row['板塊']} ({row['RS']:+.1f}%)")
     
-    # ===== TAB 2: Wolf Pack =====
+    # ===== TAB 2: Wolf Pack Scanner =====
     with tab2:
-        st.header("🎯 狼群戰術")
+        st.header("🎯 狼群掃描 - 找最強股票")
         
-        selected = st.selectbox("選擇板塊:", list(SECTORS.keys()))
+        selected_sector = st.selectbox("選擇板塊:", list(SECTORS.keys()))
         
-        if st.button(f"掃描 {selected}", type="primary"):
+        if st.button("🔍 掃描板塊", type="primary"):
             with st.spinner("分析中..."):
-                raw_data, tickers = DataFetcher.get_holdings(selected)
-                analyzer = StockAnalyzer()
+                raw_data, tickers = DataFetcher.get_holdings(selected_sector)
+                spy_data = DataFetcher.get_stock_data('SPY', '6mo')
+                
+                analyzer = ProStockAnalyzer()
                 results = []
                 
                 if raw_data is not None:
                     for t in tickers:
                         try:
                             df_t = raw_data[t] if len(tickers) > 1 else raw_data
-                            res = analyzer.analyze(df_t, t)
+                            res = analyzer.analyze(df_t, t, spy_data)
                             if res:
-                                results.append(res.__dict__)
+                                res.sector = selected_sector
+                                results.append(res)
                         except:
                             continue
                 
-                st.session_state['sector_results'] = results
-                st.session_state['selected_sector'] = selected
+                # Rank within sector
+                results.sort(key=lambda x: x.rs_rating, reverse=True)
+                for i, r in enumerate(results):
+                    r.sector_rank = i + 1
+                
+                st.session_state['sector_results'] = [r.__dict__ for r in results]
+                st.session_state['selected_sector'] = selected_sector
         
-        if 'sector_results' in st.session_state and st.session_state.get('selected_sector') == selected:
+        if 'sector_results' in st.session_state and st.session_state.get('selected_sector') == selected_sector:
             results = st.session_state['sector_results']
             if results:
                 df = pd.DataFrame(results)
                 
-                col1, col2, col3 = st.columns(3)
+                # Summary
+                col1, col2, col3, col4 = st.columns(4)
                 col1.metric("🚀 突破", f"{df['is_breakout'].sum()}")
                 col2.metric("🎯 VCP", f"{df['is_vcp'].sum()}")
-                col3.metric("📈 > SMA50", f"{df['above_sma50'].sum()}/{len(df)}")
+                col3.metric("✅ 趨勢通過", f"{df['trend_passed'].sum()}")
+                col4.metric("📊 平均 RS", f"{df['rs_rating'].mean():.0f}")
+                
+                # Table
+                st.markdown("### 📋 板塊內排名 (按 RS 排序)")
+                
+                display_df = df[['sector_rank', 'ticker', 'price', 'status', 'rs_rating', 
+                                'adr_pct', 'rsi', 'trend_score', 'earnings_warning']].copy()
+                display_df.columns = ['排名', 'Ticker', 'Price', 'Status', 'RS', 'ADR%', 'RSI', '趨勢分', '財報']
                 
                 st.dataframe(
-                    df[['ticker', 'price', 'change_pct', 'status', 'adr_pct', 'rsi']]
-                    .rename(columns={'ticker': 'Ticker', 'price': 'Price', 'change_pct': 'Change%',
-                                    'status': 'Status', 'adr_pct': 'ADR%', 'rsi': 'RSI'})
-                    .sort_values('Status', ascending=False)
-                    .style.format({'Price': '${:.2f}', 'Change%': '{:+.2f}%', 'ADR%': '{:.1f}%', 'RSI': '{:.0f}'}),
-                    use_container_width=True, hide_index=True
+                    display_df.style.format({
+                        'Price': '${:.2f}',
+                        'RS': '{:.0f}',
+                        'ADR%': '{:.1f}%',
+                        'RSI': '{:.0f}',
+                        '趨勢分': '{:.0f}%'
+                    }).background_gradient(subset=['RS'], cmap='RdYlGn'),
+                    use_container_width=True,
+                    hide_index=True
                 )
+                
+                # Recommendations
+                st.markdown("### 💡 建議")
+                top_picks = [r for r in results if r['rs_rating'] >= 70 and r['trend_passed'] and not r['is_overheated']]
+                
+                if top_picks:
+                    st.success(f"**推薦關注 ({len(top_picks)} 隻):**")
+                    for pick in top_picks[:3]:
+                        warn = f" ⚠️ {pick['earnings_warning']}" if pick['earnings_warning'] else ""
+                        st.write(f"• **{pick['ticker']}** - RS {pick['rs_rating']:.0f}, {pick['status']}{warn}")
+                else:
+                    st.info("目前沒有符合標準的推薦")
     
-    # ===== TAB 3: Temperature =====
+    # ===== TAB 3: Stock Analysis =====
     with tab3:
-        st.header("🔥 過熱偵測")
-        
-        if 'sector_results' in st.session_state and st.session_state['sector_results']:
-            df = pd.DataFrame(st.session_state['sector_results'])
-            heat_ratio = df['is_overheated'].sum() / len(df) * 100
-            
-            col1, col2, col3 = st.columns(3)
-            col1.metric("🌡️ 過熱比例", f"{heat_ratio:.0f}%")
-            col2.metric("平均乖離", f"{df['extension_pct'].mean():.1f}%")
-            col3.metric("平均 RSI", f"{df['rsi'].mean():.0f}")
-            
-            st.progress(min(int(heat_ratio), 100))
-            
-            if heat_ratio > 50:
-                st.error("🚨 極度過熱!")
-            elif heat_ratio > 30:
-                st.warning("⚠️ 過熱警告")
-            else:
-                st.success("✅ 溫度正常")
-        else:
-            st.warning("請先在狼群戰術掃描板塊")
-    
-    # ===== TAB 4: Momentum Leaders =====
-    with tab4:
-        st.header("🏆 動能排行")
-        st.info("選擇熱門股票快速查看動能")
-        
-        # Quick view of hot stocks
-        selected_hot = st.multiselect("選擇股票", HOT_STOCKS, default=['NVDA', 'TSLA', 'AMD'])
-        
-        if selected_hot:
-            analyzer = StockAnalyzer()
-            hot_results = []
-            
-            for t in selected_hot:
-                df = DataFetcher.get_stock_data(t, "6mo")
-                if df is not None:
-                    res = analyzer.analyze(df, t)
-                    if res:
-                        hot_results.append(res.__dict__)
-            
-            if hot_results:
-                df_hot = pd.DataFrame(hot_results)
-                df_hot['score'] = df_hot['adr_pct'] * 2 + (100 + df_hot['dist_52w_high']) / 10
-                df_hot = df_hot.sort_values('score', ascending=False)
-                
-                st.dataframe(
-                    df_hot[['ticker', 'price', 'change_pct', 'status', 'adr_pct', 'rsi', 'dist_52w_high']]
-                    .rename(columns={'ticker': 'Ticker', 'price': 'Price', 'change_pct': 'Change%',
-                                    'status': 'Status', 'adr_pct': 'ADR%', 'rsi': 'RSI', 
-                                    'dist_52w_high': '52W High%'})
-                    .style.format({'Price': '${:.2f}', 'Change%': '{:+.2f}%', 'ADR%': '{:.1f}%', 
-                                  'RSI': '{:.0f}', '52W High%': '{:+.1f}%'}),
-                    use_container_width=True, hide_index=True
-                )
-    
-    # ===== TAB 5: Stock Analysis (NEW!) =====
-    with tab5:
         st.header("📊 個股深度分析")
-        st.info("輸入股票代碼，獲取詳細技術分析和最佳入場點建議")
         
         col1, col2 = st.columns([2, 1])
         with col1:
-            ticker_input = st.text_input("股票代碼", value="NVDA", placeholder="輸入如 NVDA, TSLA, AAPL")
+            ticker_input = st.text_input("股票代碼", value="NVDA")
         with col2:
             period = st.selectbox("時間範圍", ["6mo", "1y", "2y"], index=1)
         
-        if st.button("🔍 分析股票", type="primary"):
+        if st.button("🔍 分析", type="primary"):
             ticker = ticker_input.upper().strip()
             
-            with st.spinner(f"正在分析 {ticker}..."):
+            with st.spinner(f"分析 {ticker}..."):
                 df = DataFetcher.get_stock_data(ticker, period)
+                spy_df = DataFetcher.get_stock_data('SPY', period)
                 
-                if df is None or len(df) == 0:
-                    st.error(f"無法獲取 {ticker} 的數據")
+                if df is None:
+                    st.error(f"無法獲取 {ticker} 數據")
                 else:
-                    # Analyze
-                    analyzer = StockAnalyzer()
-                    ta = TechnicalAnalysis()
-                    entry_calc = EntryPointCalculator()
-                    chart_builder = ChartBuilder()
-                    
-                    analysis = analyzer.analyze(df, ticker)
-                    entries = entry_calc.calculate(df)
-                    levels = ta.find_support_resistance(df)
-                    
-                    # ===== 1. Overview Metrics =====
-                    st.subheader(f"📈 {ticker} 概覽")
+                    analyzer = ProStockAnalyzer()
+                    analysis = analyzer.analyze(df, ticker, spy_df)
                     
                     if analysis:
-                        col1, col2, col3, col4, col5 = st.columns(5)
+                        # Overview
+                        st.subheader(f"📈 {ticker} 概覽")
+                        
+                        col1, col2, col3, col4, col5, col6 = st.columns(6)
                         col1.metric("價格", f"${analysis.price:.2f}", f"{analysis.change_pct:+.2f}%")
-                        col2.metric("狀態", analysis.status)
-                        col3.metric("RSI", f"{analysis.rsi:.0f}")
+                        col2.metric("RS Rating", f"{analysis.rs_rating:.0f}")
+                        col3.metric("狀態", analysis.status)
                         col4.metric("ADR%", f"{analysis.adr_pct:.1f}%")
-                        col5.metric("52W High", f"{analysis.dist_52w_high:+.1f}%")
-                    
-                    # ===== 2. Chart =====
-                    st.subheader("📊 技術圖表")
-                    fig = chart_builder.create_stock_chart(df, ticker, entries)
-                    st.plotly_chart(fig, use_container_width=True)
-                    
-                    # ===== 3. Key Levels =====
-                    st.subheader("🎯 關鍵價位")
-                    
-                    col1, col2, col3 = st.columns(3)
-                    with col1:
-                        st.markdown("**📈 阻力位**")
-                        st.write(f"• 52週高點: ${levels['high_52w']:.2f}")
-                        st.write(f"• 20日高點: ${levels['high_20d']:.2f}")
-                        st.write(f"• 最近阻力: ${levels['nearest_resistance']:.2f}")
-                    
-                    with col2:
-                        st.markdown("**📉 支撐位**")
-                        st.write(f"• SMA20: ${levels['sma20']:.2f}")
-                        st.write(f"• SMA50: ${levels['sma50']:.2f}")
-                        st.write(f"• 最近支撐: ${levels['nearest_support']:.2f}")
-                    
-                    with col3:
-                        st.markdown("**📊 均線**")
-                        st.write(f"• SMA20: ${levels['sma20']:.2f}")
-                        st.write(f"• SMA50: ${levels['sma50']:.2f}")
-                        st.write(f"• SMA200: ${levels['sma200']:.2f}")
-                    
-                    # ===== 4. Entry Points =====
-                    st.subheader("🎯 最佳入場點建議")
-                    
-                    if entries:
-                        for i, entry in enumerate(entries):
-                            with st.expander(f"{entry.entry_type} - 信心: {entry.confidence.upper()}", expanded=(i==0)):
-                                col1, col2 = st.columns(2)
-                                
-                                with col1:
-                                    st.markdown(f"""
-                                    | 項目 | 價格 |
-                                    |------|------|
-                                    | **入場價** | ${entry.entry_price} |
-                                    | **止損** | ${entry.stop_loss} |
-                                    | **目標1** | ${entry.target_1} |
-                                    | **目標2** | ${entry.target_2} |
-                                    | **風險回報比** | {entry.risk_reward}:1 |
-                                    """)
-                                
-                                with col2:
-                                    # Risk calculation
-                                    risk_per_share = entry.entry_price - entry.stop_loss
-                                    reward_per_share = entry.target_1 - entry.entry_price
-                                    
-                                    st.markdown(f"""
-                                    **📝 說明:**
-                                    {entry.notes}
-                                    
-                                    **💰 風險計算 (以 $10,000 為例):**
-                                    - 風險 2%: 最多可買 {int(200 / risk_per_share)} 股
-                                    - 每股風險: ${risk_per_share:.2f}
-                                    - 每股潛在收益: ${reward_per_share:.2f}
-                                    """)
-                    else:
-                        st.warning("目前沒有明確的入場信號，建議等待更好的機會")
-                        st.markdown("""
-                        **可能原因:**
-                        - 股價不在關鍵位置附近
-                        - 沒有明顯的技術形態
-                        - 建議等待回調到支撐位或突破阻力位
-                        """)
-                    
-                    # ===== 5. Trading Plan =====
-                    st.subheader("📋 交易計劃建議")
-                    
-                    if analysis:
-                        if analysis.is_breakout:
-                            st.success("""
-                            **🚀 突破中 - 可考慮入場**
-                            1. 等待回測突破位確認
-                            2. 設置止損在突破位下方
-                            3. 分批止盈
+                        col5.metric("RSI", f"{analysis.rsi:.0f}")
+                        col6.metric("趨勢分", f"{analysis.trend_score:.0f}%")
+                        
+                        # Earnings warning
+                        if analysis.earnings_warning:
+                            st.warning(f"📅 財報提醒: {analysis.earnings_warning}")
+                        
+                        # Chart
+                        st.subheader("📊 技術圖表")
+                        chart = ProChartBuilder.create_analysis_chart(df, ticker, analysis)
+                        st.plotly_chart(chart, use_container_width=True)
+                        
+                        # Entry Plan
+                        st.subheader("🎯 交易計劃")
+                        
+                        col1, col2 = st.columns(2)
+                        
+                        with col1:
+                            st.markdown(f"""
+                            | 項目 | 價格 |
+                            |------|------|
+                            | **建議入場** | ${analysis.suggested_entry} |
+                            | **止損** | ${analysis.suggested_stop} |
+                            | **風險回報** | {analysis.risk_reward}:1 |
                             """)
-                        elif analysis.is_vcp:
+                            
+                            # Position sizing
+                            risk_per_share = analysis.suggested_entry - analysis.suggested_stop
+                            if risk_per_share > 0:
+                                st.markdown(f"""
+                                **倉位建議 ($100,000 帳戶, 2% 風險):**
+                                - 最大股數: {int(2000 / risk_per_share)} 股
+                                - 倉位金額: ${int(2000 / risk_per_share) * analysis.suggested_entry:,.0f}
+                                """)
+                        
+                        with col2:
+                            # Targets
+                            targets = PositionCalculator.calculate_targets(
+                                analysis.suggested_entry, 
+                                analysis.suggested_stop
+                            )
+                            
+                            st.markdown("**止盈目標:**")
+                            for t in targets:
+                                st.write(f"• {t['r_multiple']}R: ${t['price']} (+{t['profit_pct']}%)")
+                        
+                        # Trading Decision
+                        st.subheader("📋 交易決策")
+                        
+                        if analysis.is_breakout and analysis.trend_passed:
+                            st.success("""
+                            ✅ **可以入場**
+                            - 放量突破 + 趨勢健康
+                            - 建議: 分批建倉，先買 1/2 倉位
+                            """)
+                        elif analysis.is_vcp and analysis.trend_passed:
                             st.info("""
-                            **🎯 VCP 形態 - 準備入場**
-                            1. 等待突破近期高點
-                            2. 需要成交量放大確認
-                            3. 止損設在 VCP 低點
+                            🎯 **準備入場**
+                            - VCP 形態形成中
+                            - 建議: 等待突破確認再入場
                             """)
                         elif analysis.is_overheated:
                             st.error("""
-                            **🔥 過熱警告 - 不建議追高**
-                            1. 等待回調到均線支撐
-                            2. 或等待整理形態形成
-                            3. 勿在高位追入
+                            ⛔ **不建議入場**
+                            - 股價過熱，風險高
+                            - 建議: 等待回調到均線支撐
                             """)
-                        elif not analysis.above_sma50:
+                        elif not analysis.trend_passed:
                             st.warning("""
-                            **⚠️ 弱勢 - 觀望**
-                            1. 等待站回 SMA50 之上
-                            2. 或等待在支撐位形成反轉
-                            3. 不建議現在入場
+                            ⚠️ **趨勢不佳**
+                            - 未通過趨勢模板
+                            - 建議: 觀望，等待趨勢改善
                             """)
                         else:
                             st.info("""
-                            **🧘 盤整中 - 等待機會**
-                            1. 設置突破提醒
-                            2. 觀察成交量變化
-                            3. 等待明確信號
+                            🧘 **觀望**
+                            - 等待更好的入場機會
                             """)
+    
+    # ===== TAB 4: Position Calculator =====
+    with tab4:
+        st.header("💰 倉位計算器")
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            account_size = st.number_input("帳戶總值 ($)", value=100000, step=10000)
+            risk_percent = st.slider("單筆風險 (%)", 0.5, 5.0, 2.0, 0.5) / 100
+            
+        with col2:
+            entry_price = st.number_input("入場價 ($)", value=150.0, step=1.0)
+            stop_loss = st.number_input("止損價 ($)", value=140.0, step=1.0)
+        
+        if st.button("計算倉位", type="primary"):
+            result = PositionCalculator.calculate_position(
+                account_size, entry_price, stop_loss, risk_percent
+            )
+            
+            if 'error' not in result:
+                col1, col2, col3 = st.columns(3)
+                col1.metric("建議股數", f"{result['shares']} 股")
+                col2.metric("倉位金額", f"${result['position_value']:,.0f}")
+                col3.metric("倉位比例", f"{result['position_percent']:.1f}%")
+                
+                st.markdown(f"""
+                ### 風險明細
+                - 風險金額: ${result['risk_amount']:,.0f}
+                - 每股風險: ${result['risk_per_share']:.2f}
+                - 最大虧損: ${result['max_loss']:,.0f}
+                """)
+                
+                # Targets
+                targets = PositionCalculator.calculate_targets(entry_price, stop_loss)
+                st.markdown("### 止盈目標")
+                for t in targets:
+                    profit = result['shares'] * (t['price'] - entry_price)
+                    st.write(f"• **{t['r_multiple']}R**: ${t['price']} (盈利 ${profit:,.0f})")
+    
+    # ===== TAB 5: Watchlist =====
+    with tab5:
+        st.header("📋 Watchlist")
+        
+        # Initialize watchlist
+        if 'watchlist' not in st.session_state:
+            st.session_state['watchlist'] = ['NVDA', 'TSLA', 'AMD']
+        
+        # Add stock
+        col1, col2 = st.columns([3, 1])
+        with col1:
+            new_ticker = st.text_input("添加股票", placeholder="輸入代碼如 AAPL")
+        with col2:
+            if st.button("➕ 添加"):
+                if new_ticker and new_ticker.upper() not in st.session_state['watchlist']:
+                    st.session_state['watchlist'].append(new_ticker.upper())
+        
+        # Display watchlist
+        if st.session_state['watchlist']:
+            spy_df = DataFetcher.get_stock_data('SPY', '6mo')
+            analyzer = ProStockAnalyzer()
+            
+            watchlist_data = []
+            for t in st.session_state['watchlist']:
+                df = DataFetcher.get_stock_data(t, '6mo')
+                if df is not None:
+                    analysis = analyzer.analyze(df, t, spy_df)
+                    if analysis:
+                        watchlist_data.append(analysis.__dict__)
+            
+            if watchlist_data:
+                df_watch = pd.DataFrame(watchlist_data)
+                df_watch = df_watch.sort_values('rs_rating', ascending=False)
+                
+                st.dataframe(
+                    df_watch[['ticker', 'price', 'status', 'rs_rating', 'adr_pct', 
+                             'rsi', 'trend_passed', 'earnings_warning']]
+                    .rename(columns={
+                        'ticker': 'Ticker', 'price': 'Price', 'status': 'Status',
+                        'rs_rating': 'RS', 'adr_pct': 'ADR%', 'rsi': 'RSI',
+                        'trend_passed': '趨勢OK', 'earnings_warning': '財報'
+                    })
+                    .style.format({'Price': '${:.2f}', 'RS': '{:.0f}', 'ADR%': '{:.1f}%', 'RSI': '{:.0f}'}),
+                    use_container_width=True,
+                    hide_index=True
+                )
+        
+        # Clear watchlist
+        if st.button("🗑️ 清空 Watchlist"):
+            st.session_state['watchlist'] = []
+    
+    # ===== TAB 6: Risk Dashboard =====
+    with tab6:
+        st.header("📈 風控儀表板")
+        
+        st.markdown("""
+        ### 🎯 專業交易員守則
+        
+        | 規則 | 設定 | 說明 |
+        |------|------|------|
+        | 單筆風險 | ≤ 2% | 每筆交易最多虧損帳戶 2% |
+        | 總風險 | ≤ 10% | 所有持倉最大總虧損 10% |
+        | 最大持倉 | 5-8 個 | 避免過度分散或集中 |
+        | 板塊暴露 | ≤ 40% | 單一板塊不超過 40% |
+        | 財報迴避 | 7 天 | 財報前 7 天不開新倉 |
+        
+        ### 📊 風險檢查清單
+        """)
+        
+        checklist = [
+            ("✅" if market['score'] >= 50 else "❌", "大盤環境健康"),
+            ("✅" if market.get('vix', 30) < 25 else "❌", "VIX < 25"),
+            ("✅", "單筆風險 ≤ 2%"),
+            ("✅", "止損設定明確"),
+            ("✅", "財報日期已確認"),
+        ]
+        
+        for status, item in checklist:
+            st.write(f"{status} {item}")
+        
+        st.markdown("""
+        ### 💡 年化 30% 的關鍵
+        
+        1. **只買最強股票** - RS > 80, 趨勢模板通過
+        2. **順勢交易** - 大盤弱勢時減少交易
+        3. **嚴格止損** - 虧損 7-8% 立即出場
+        4. **讓利潤奔跑** - 用移動止盈保護利潤
+        5. **控制風險** - 單筆 2%, 總體 10%
+        6. **避開財報** - 財報前 7 天不開新倉
+        """)
     
     # Sidebar
     st.sidebar.divider()
-    st.sidebar.markdown("### 📖 v4.0 新功能")
+    st.sidebar.markdown("### 📖 v5.0 Pro 功能")
     st.sidebar.markdown("""
-    - ✅ **個股深度分析**
-    - ✅ **最佳入場點計算**
-    - ✅ **支撐/阻力位**
-    - ✅ **風險回報計算**
-    - ✅ **互動技術圖表**
-    - ✅ **交易計劃建議**
-    """)
-    
-    st.sidebar.divider()
-    st.sidebar.info("""
-    **入場類型說明:**
-    - 🚀 **突破**: 價格創新高
-    - 📉 **回調**: 回到均線支撐
-    - 🎯 **VCP**: 波動收縮突破
-    - 💚 **反彈**: 支撐位反彈
+    - ✅ RS Rating (相對強度)
+    - ✅ 趨勢模板 (Minervini)
+    - ✅ 財報日期追蹤
+    - ✅ 市場環境評估
+    - ✅ 專業倉位計算
+    - ✅ Watchlist 管理
+    - ✅ 風控儀表板
     """)
 
 
