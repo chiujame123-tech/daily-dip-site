@@ -1,7 +1,5 @@
+streamlit
 yfinance
-mplfinance
 pandas
 numpy
-matplotlib
-requests
-lxml
+plotly
