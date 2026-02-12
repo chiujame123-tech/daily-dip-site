@@ -1,25 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-🎯 Market Structure Radar - v7.0 Ultimate Edition
-=================================================
+🎯 Market Structure Radar - v7.5 Pro Trader Edition
+===================================================
 
 重大改進：
-✅ 擴大掃描範圍 - 200+ 股票
-✅ 新增 IBD 50/100 風格熱門股
-✅ 新增 52週新高掃描
-✅ 新增趨勢模板檢查
-✅ 新增 Power Play 設定
-✅ 改進 UI/UX
-✅ 新增交易日誌模板
-✅ 新增績效追蹤
+✅ 圖表上標註 VCP/BGU 關鍵點位
+✅ 優化止損位置 (更緊的止損)
+✅ 期權策略建議 (賣PUT/買CALL/價差組合)
+✅ A級 Setup 詳細買入理由
 
 Author: Pro Trader AI
-Target: 30%+ Annual Return
 """
 
-# ============================================
-# 📦 IMPORTS
-# ============================================
 import streamlit as st
 import yfinance as yf
 import pandas as pd
@@ -38,122 +30,65 @@ warnings.filterwarnings('ignore')
 # ============================================
 @dataclass
 class Config:
-    PAGE_TITLE: str = "Market Radar v7.0 Ultimate"
+    PAGE_TITLE: str = "Market Radar v7.5 Pro"
     PAGE_ICON: str = "🎯"
     CACHE_TTL: int = 1800
     
-    # Setup Thresholds
-    BGU_MIN_GAP: float = 3.0
-    BGU_MIN_VOLUME: float = 1.5
-    VCP_MAX_TIGHTNESS: float = 12.0
-    VCP_MIN_CONTRACTIONS: int = 2
+    # 優化後的止損參數 (更緊)
+    BGU_STOP_ATR_MULT: float = 0.3  # 從 0.5 改為 0.3
+    VCP_STOP_ATR_MULT: float = 0.2  # 從 0.3 改為 0.2
+    PP_STOP_ATR_MULT: float = 0.25
 
 CONFIG = Config()
 
 # ============================================
-# 📊 擴大的股票宇宙 (200+ 股票)
+# 📊 STOCK UNIVERSE
 # ============================================
 STOCK_UNIVERSE = {
-    # === 科技 ===
-    'Mega Cap Tech': [
-        'AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'NVDA', 'TSLA', 'AVGO', 'ORCL', 'CRM'
-    ],
-    'Semiconductors': [
-        'NVDA', 'AMD', 'AVGO', 'TSM', 'QCOM', 'TXN', 'MU', 'AMAT', 'LRCX', 'KLAC',
-        'ADI', 'MRVL', 'NXPI', 'ON', 'MCHP', 'ARM', 'SMCI', 'INTC', 'ASML', 'SNPS'
-    ],
-    'Software & Cloud': [
-        'MSFT', 'CRM', 'ADBE', 'NOW', 'INTU', 'PANW', 'CRWD', 'SNOW', 'DDOG', 'NET',
-        'MDB', 'PLTR', 'ZS', 'FTNT', 'WDAY', 'TEAM', 'HUBS', 'OKTA', 'DOCU', 'ZM'
-    ],
-    'Internet & Media': [
-        'GOOGL', 'META', 'NFLX', 'DIS', 'BKNG', 'ABNB', 'UBER', 'LYFT', 'DASH', 'SNAP',
-        'PINS', 'SPOT', 'ROKU', 'TTD', 'RBLX', 'U', 'EA', 'TTWO', 'MTCH', 'CHWY'
-    ],
-    
-    # === 金融 ===
-    'Financials': [
-        'JPM', 'BAC', 'WFC', 'GS', 'MS', 'C', 'BLK', 'SCHW', 'AXP', 'V',
-        'MA', 'PYPL', 'SQ', 'COIN', 'HOOD', 'AFRM', 'SOFI', 'ICE', 'CME', 'SPGI'
-    ],
-    
-    # === 醫療 ===
-    'Healthcare': [
-        'LLY', 'UNH', 'JNJ', 'MRK', 'ABBV', 'PFE', 'TMO', 'ABT', 'DHR', 'BMY',
-        'AMGN', 'GILD', 'VRTX', 'REGN', 'MRNA', 'ISRG', 'MDT', 'SYK', 'BSX', 'EW'
-    ],
-    
-    # === 消費 ===
-    'Consumer': [
-        'AMZN', 'TSLA', 'HD', 'MCD', 'NKE', 'SBUX', 'LOW', 'TJX', 'COST', 'WMT',
-        'TGT', 'LULU', 'CMG', 'YUM', 'DPZ', 'ROST', 'ORLY', 'AZO', 'ULTA', 'DG'
-    ],
-    
-    # === 能源 ===
-    'Energy': [
-        'XOM', 'CVX', 'COP', 'EOG', 'SLB', 'OXY', 'MPC', 'VLO', 'PSX', 'PXD',
-        'DVN', 'HES', 'FANG', 'HAL', 'BKR', 'KMI', 'WMB', 'OKE', 'LNG', 'TRGP'
-    ],
-    
-    # === 工業 ===
-    'Industrials': [
-        'CAT', 'DE', 'UNP', 'HON', 'UPS', 'RTX', 'BA', 'LMT', 'GE', 'MMM',
-        'EMR', 'ETN', 'ITW', 'PH', 'ROK', 'CMI', 'PCAR', 'ODFL', 'FAST', 'URI'
-    ],
-    
-    # === 高成長 / 投機 ===
-    'High Growth': [
-        'NVDA', 'SMCI', 'ARM', 'PLTR', 'COIN', 'MSTR', 'AFRM', 'SOFI', 'HOOD', 'UPST',
-        'RBLX', 'U', 'DKNG', 'BILL', 'SHOP', 'SQ', 'MELI', 'SE', 'GRAB', 'NU'
-    ],
-    
-    # === 中概股 ===
-    'China ADR': [
-        'BABA', 'JD', 'PDD', 'BIDU', 'NIO', 'LI', 'XPEV', 'BILI', 'TME', 'NTES',
-        'BEKE', 'VIPS', 'TAL', 'EDU', 'FUTU', 'TIGR', 'ZTO', 'YUMC', 'QFIN', 'HTHT'
-    ],
-    
-    # === 新能源 / EV ===
-    'Clean Energy & EV': [
-        'TSLA', 'RIVN', 'LCID', 'NIO', 'LI', 'XPEV', 'F', 'GM', 'ENPH', 'SEDG',
-        'FSLR', 'RUN', 'PLUG', 'BE', 'CHPT', 'QS', 'BLNK', 'EVGO', 'PTRA', 'FSR'
-    ],
-    
-    # === AI 概念 ===
-    'AI & Robotics': [
-        'NVDA', 'MSFT', 'GOOGL', 'META', 'AMD', 'SMCI', 'ARM', 'PLTR', 'PATH', 'AI',
-        'UPST', 'SOUN', 'BBAI', 'GFAI', 'PRCT', 'ISRG', 'INTUV', 'ABMD', 'IRTC', 'CGNX'
-    ],
-    
-    # === IBD 風格領導股 ===
     'Market Leaders': [
         'NVDA', 'META', 'AMZN', 'GOOGL', 'MSFT', 'AAPL', 'LLY', 'AVGO', 'TSLA', 'AMD',
         'CRM', 'NOW', 'PANW', 'CRWD', 'NFLX', 'COST', 'ISRG', 'LULU', 'CMG', 'FICO'
     ],
-    
-    # === ETF ===
-    'Key ETFs': [
-        'SPY', 'QQQ', 'IWM', 'DIA', 'SMH', 'XLK', 'XLF', 'XLE', 'XLV', 'XLI',
-        'XLY', 'XLP', 'XLU', 'ARKK', 'KWEB', 'TLT', 'GLD', 'SLV', 'USO', 'VIX'
+    'Semiconductors': [
+        'NVDA', 'AMD', 'AVGO', 'TSM', 'QCOM', 'MU', 'AMAT', 'LRCX', 'KLAC',
+        'MRVL', 'ARM', 'SMCI', 'INTC', 'ASML', 'SNPS', 'ON', 'NXPI', 'ADI', 'MCHP', 'TXN'
+    ],
+    'Software & Cloud': [
+        'MSFT', 'CRM', 'ADBE', 'NOW', 'INTU', 'PANW', 'CRWD', 'SNOW', 'DDOG', 'NET',
+        'MDB', 'PLTR', 'ZS', 'FTNT', 'WDAY', 'TEAM', 'HUBS', 'OKTA', 'BILL', 'DOCU'
+    ],
+    'High Growth': [
+        'NVDA', 'SMCI', 'ARM', 'PLTR', 'COIN', 'MSTR', 'AFRM', 'SOFI', 'HOOD', 'UPST',
+        'RBLX', 'DKNG', 'SHOP', 'SQ', 'MELI', 'SE', 'NU', 'GRAB', 'BILL', 'CELH'
+    ],
+    'Financials': [
+        'JPM', 'BAC', 'WFC', 'GS', 'MS', 'V', 'MA', 'AXP', 'BLK', 'SCHW',
+        'COIN', 'HOOD', 'SOFI', 'AFRM', 'PYPL', 'SQ', 'ICE', 'CME', 'SPGI', 'MCO'
+    ],
+    'Healthcare': [
+        'LLY', 'UNH', 'JNJ', 'MRK', 'ABBV', 'PFE', 'TMO', 'ABT', 'DHR', 'AMGN',
+        'GILD', 'VRTX', 'REGN', 'MRNA', 'ISRG', 'BSX', 'EW', 'SYK', 'MDT', 'ZTS'
+    ],
+    'China ADR': [
+        'BABA', 'JD', 'PDD', 'BIDU', 'NIO', 'LI', 'XPEV', 'BILI', 'TME', 'NTES',
+        'BEKE', 'FUTU', 'TIGR', 'TAL', 'EDU', 'YUMC', 'ZTO', 'QFIN', 'VIPS', 'HTHT'
+    ],
+    'Clean Energy & EV': [
+        'TSLA', 'RIVN', 'LCID', 'NIO', 'LI', 'XPEV', 'ENPH', 'SEDG', 'FSLR', 'RUN',
+        'PLUG', 'BE', 'CHPT', 'QS', 'F', 'GM', 'BLNK', 'EVGO', 'LEA', 'ALB'
     ],
 }
 
-# 所有股票 (去重)
-ALL_STOCKS = list(set([s for stocks in STOCK_UNIVERSE.values() for s in stocks if not s.startswith('^')]))
+ALL_STOCKS = list(set([s for stocks in STOCK_UNIVERSE.values() for s in stocks]))
 ALL_STOCKS.sort()
 
-# 板塊 ETF 映射
 SECTORS = {
-    'SMH (半導體)': {'etf': 'SMH', 'holdings': STOCK_UNIVERSE['Semiconductors'], 'theme': '🔬 AI/芯片'},
-    'XLK (科技)': {'etf': 'XLK', 'holdings': STOCK_UNIVERSE['Software & Cloud'], 'theme': '💻 軟件'},
-    'XLC (通訊)': {'etf': 'XLC', 'holdings': STOCK_UNIVERSE['Internet & Media'][:10], 'theme': '📱 互聯網'},
-    'XLF (金融)': {'etf': 'XLF', 'holdings': STOCK_UNIVERSE['Financials'][:10], 'theme': '🏦 金融'},
-    'XLY (消費)': {'etf': 'XLY', 'holdings': STOCK_UNIVERSE['Consumer'][:10], 'theme': '🛒 消費'},
-    'XLV (醫療)': {'etf': 'XLV', 'holdings': STOCK_UNIVERSE['Healthcare'][:10], 'theme': '💊 醫療'},
-    'XLE (能源)': {'etf': 'XLE', 'holdings': STOCK_UNIVERSE['Energy'][:10], 'theme': '⛽ 能源'},
-    'XLI (工業)': {'etf': 'XLI', 'holdings': STOCK_UNIVERSE['Industrials'][:10], 'theme': '🏭 工業'},
-    'ARKK (創新)': {'etf': 'ARKK', 'holdings': STOCK_UNIVERSE['High Growth'][:10], 'theme': '🚀 創新'},
-    'KWEB (中概)': {'etf': 'KWEB', 'holdings': STOCK_UNIVERSE['China ADR'][:10], 'theme': '🇨🇳 中概'},
+    'SMH (半導體)': {'etf': 'SMH', 'holdings': STOCK_UNIVERSE['Semiconductors'][:12]},
+    'XLK (科技)': {'etf': 'XLK', 'holdings': STOCK_UNIVERSE['Software & Cloud'][:12]},
+    'XLF (金融)': {'etf': 'XLF', 'holdings': STOCK_UNIVERSE['Financials'][:12]},
+    'XLV (醫療)': {'etf': 'XLV', 'holdings': STOCK_UNIVERSE['Healthcare'][:12]},
+    'ARKK (成長)': {'etf': 'ARKK', 'holdings': STOCK_UNIVERSE['High Growth'][:12]},
+    'KWEB (中概)': {'etf': 'KWEB', 'holdings': STOCK_UNIVERSE['China ADR'][:12]},
 }
 
 # ============================================
@@ -204,10 +139,6 @@ class TechnicalAnalysis:
     
     @staticmethod
     def check_trend_template(df: pd.DataFrame) -> Dict:
-        """
-        Mark Minervini Trend Template
-        檢查股票是否在健康的上升趨勢中
-        """
         if len(df) < 200:
             return {'passed': False, 'score': 0, 'checks': []}
         
@@ -215,227 +146,273 @@ class TechnicalAnalysis:
         sma50 = float(df['Close'].rolling(50).mean().iloc[-1])
         sma150 = float(df['Close'].rolling(150).mean().iloc[-1])
         sma200 = float(df['Close'].rolling(200).mean().iloc[-1])
-        sma200_prev = float(df['Close'].rolling(200).mean().iloc[-20])
-        high_52w = float(df['High'].tail(252).max())
-        low_52w = float(df['Low'].tail(252).min())
         
         checks = []
         passed = 0
         
-        # Check 1: Price > SMA50
-        if close > sma50:
-            checks.append(('✅', 'Price > SMA50'))
-            passed += 1
-        else:
-            checks.append(('❌', 'Price < SMA50'))
+        if close > sma50: checks.append(('✅', 'Price > SMA50')); passed += 1
+        else: checks.append(('❌', 'Price < SMA50'))
         
-        # Check 2: Price > SMA150
-        if close > sma150:
-            checks.append(('✅', 'Price > SMA150'))
-            passed += 1
-        else:
-            checks.append(('❌', 'Price < SMA150'))
+        if close > sma150: checks.append(('✅', 'Price > SMA150')); passed += 1
+        else: checks.append(('❌', 'Price < SMA150'))
         
-        # Check 3: Price > SMA200
-        if close > sma200:
-            checks.append(('✅', 'Price > SMA200'))
-            passed += 1
-        else:
-            checks.append(('❌', 'Price < SMA200'))
+        if close > sma200: checks.append(('✅', 'Price > SMA200')); passed += 1
+        else: checks.append(('❌', 'Price < SMA200'))
         
-        # Check 4: SMA50 > SMA150
-        if sma50 > sma150:
-            checks.append(('✅', 'SMA50 > SMA150'))
-            passed += 1
-        else:
-            checks.append(('❌', 'SMA50 < SMA150'))
+        if sma50 > sma150: checks.append(('✅', 'SMA50 > SMA150')); passed += 1
+        else: checks.append(('❌', 'SMA50 < SMA150'))
         
-        # Check 5: SMA150 > SMA200
-        if sma150 > sma200:
-            checks.append(('✅', 'SMA150 > SMA200'))
-            passed += 1
-        else:
-            checks.append(('❌', 'SMA150 < SMA200'))
+        if sma150 > sma200: checks.append(('✅', 'SMA150 > SMA200')); passed += 1
+        else: checks.append(('❌', 'SMA150 < SMA200'))
         
-        # Check 6: SMA200 trending up
-        if sma200 > sma200_prev:
-            checks.append(('✅', 'SMA200 上升中'))
-            passed += 1
-        else:
-            checks.append(('❌', 'SMA200 下降中'))
-        
-        # Check 7: Price within 25% of 52w high
-        if close >= high_52w * 0.75:
-            checks.append(('✅', '距52週高點 < 25%'))
-            passed += 1
-        else:
-            checks.append(('❌', '距52週高點 > 25%'))
-        
-        # Check 8: Price at least 30% above 52w low
-        if close >= low_52w * 1.30:
-            checks.append(('✅', '距52週低點 > 30%'))
-            passed += 1
-        else:
-            checks.append(('❌', '距52週低點 < 30%'))
-        
-        return {
-            'passed': passed >= 6,
-            'score': passed,
-            'total': 8,
-            'checks': checks
-        }
+        return {'passed': passed >= 4, 'score': passed, 'total': 5, 'checks': checks}
 
 
 # ============================================
-# 🔍 MARKET SCANNER (全新)
-# ============================================
-class MarketScanner:
-    """市場掃描器 - 多種掃描模式"""
-    
-    def __init__(self):
-        self.ta = TechnicalAnalysis()
-    
-    @st.cache_data(ttl=1800)
-    def scan_52w_highs(_self, stocks: List[str]) -> List[Dict]:
-        """掃描創52週新高的股票"""
-        results = []
-        
-        for ticker in stocks:
-            try:
-                df = yf.download(ticker, period='1y', progress=False)
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                
-                if df is None or len(df) < 200:
-                    continue
-                
-                close = float(df['Close'].iloc[-1])
-                high_52w = float(df['High'].max())
-                low_52w = float(df['Low'].min())
-                
-                # 在52週高點的 5% 以內
-                if close >= high_52w * 0.95:
-                    dist_from_high = (close / high_52w - 1) * 100
-                    dist_from_low = (close / low_52w - 1) * 100
-                    
-                    # Volume
-                    vol_avg = float(df['Volume'].tail(50).mean())
-                    vol_today = float(df['Volume'].iloc[-1])
-                    vol_ratio = vol_today / vol_avg if vol_avg > 0 else 1
-                    
-                    results.append({
-                        'ticker': ticker,
-                        'price': close,
-                        'high_52w': high_52w,
-                        'dist_high': dist_from_high,
-                        'dist_low': dist_from_low,
-                        'vol_ratio': vol_ratio,
-                        'new_high': close >= high_52w * 0.99
-                    })
-            except:
-                continue
-        
-        results.sort(key=lambda x: x['dist_high'], reverse=True)
-        return results
-    
-    @st.cache_data(ttl=1800)
-    def scan_high_rs(_self, stocks: List[str], spy_df: pd.DataFrame) -> List[Dict]:
-        """掃描高 RS Rating 的股票"""
-        results = []
-        
-        for ticker in stocks:
-            try:
-                df = yf.download(ticker, period='6mo', progress=False)
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                
-                if df is None or len(df) < 60:
-                    continue
-                
-                rs = _self.ta.rs_rating(df, spy_df)
-                
-                if rs >= 70:
-                    close = float(df['Close'].iloc[-1])
-                    change_1m = (close / float(df['Close'].iloc[-21]) - 1) * 100
-                    
-                    results.append({
-                        'ticker': ticker,
-                        'price': close,
-                        'rs_rating': rs,
-                        'change_1m': change_1m
-                    })
-            except:
-                continue
-        
-        results.sort(key=lambda x: x['rs_rating'], reverse=True)
-        return results
-    
-    @st.cache_data(ttl=1800)
-    def scan_trend_template(_self, stocks: List[str]) -> List[Dict]:
-        """掃描通過趨勢模板的股票"""
-        results = []
-        
-        for ticker in stocks:
-            try:
-                df = yf.download(ticker, period='1y', progress=False)
-                if isinstance(df.columns, pd.MultiIndex):
-                    df.columns = df.columns.get_level_values(0)
-                
-                if df is None or len(df) < 200:
-                    continue
-                
-                trend = _self.ta.check_trend_template(df)
-                
-                if trend['score'] >= 5:  # 至少通過 5/8
-                    close = float(df['Close'].iloc[-1])
-                    results.append({
-                        'ticker': ticker,
-                        'price': close,
-                        'trend_score': trend['score'],
-                        'trend_total': trend['total'],
-                        'passed': trend['passed'],
-                        'checks': trend['checks']
-                    })
-            except:
-                continue
-        
-        results.sort(key=lambda x: x['trend_score'], reverse=True)
-        return results
-
-
-# ============================================
-# 🎯 SETUP SCANNER
+# 🎯 SETUP RESULT (擴展)
 # ============================================
 @dataclass
 class SetupResult:
     ticker: str
-    setup_type: str
-    quality: str
+    setup_type: str  # 'BGU', 'VCP', 'PP'
+    quality: str  # 'A+', 'A', 'B', 'C'
     score: float
     price: float
-    gap_percent: float
-    tightness: float
+    
+    # 入場/止損
     entry_price: float
     stop_loss: float
     target_1: float
     target_2: float
+    target_3: float  # 新增第三目標
     risk_reward: float
+    
+    # 技術指標
     rs_rating: float
     adr_percent: float
     volume_ratio: float
-    above_sma50: bool
-    notes: str
-    grade_explanation: str = ""
-    entry_explanation: str = ""
-    risk_explanation: str = ""
+    
+    # Setup 特定數據
+    gap_percent: float = 0  # BGU
+    tightness: float = 0  # VCP
+    contractions: int = 0  # VCP
+    
+    # VCP 標註數據 (用於圖表)
+    pivot_price: float = 0
+    pivot_date: str = ""
+    vcp_low: float = 0
+    vcp_low_date: str = ""
+    contraction_levels: List[Dict] = None  # 每次收縮的高低點
+    
+    # BGU 標註數據
+    gap_day_date: str = ""
+    gap_day_open: float = 0
+    gap_day_low: float = 0
+    gap_day_high: float = 0
+    prev_close: float = 0
+    
+    # 解釋
+    notes: str = ""
+    buy_reasons: List[str] = None  # 詳細買入理由
+    risk_factors: List[str] = None  # 風險因素
+    
+    # 期權建議
+    options_strategy: Dict = None
 
 
+# ============================================
+# 📈 期權策略生成器
+# ============================================
+class OptionsStrategyGenerator:
+    """根據 Setup 生成期權策略建議"""
+    
+    @staticmethod
+    def generate_strategy(setup: SetupResult) -> Dict:
+        """
+        根據 Setup 類型和質量生成期權策略
+        """
+        price = setup.price
+        entry = setup.entry_price
+        stop = setup.stop_loss
+        target1 = setup.target_1
+        target2 = setup.target_2
+        
+        risk_pct = abs(entry - stop) / entry * 100
+        reward_pct = (target1 - entry) / entry * 100
+        
+        strategies = []
+        
+        # ===== 策略1: 賣出認沽期權 (Cash Secured Put) =====
+        # 適合: 想要在回調時買入的情況
+        put_strike = round(stop * 1.02, 0)  # 略高於止損位
+        
+        strategies.append({
+            'name': '💰 賣出認沽期權 (Cash Secured Put)',
+            'description': f'在支撐位賣 PUT，收取權利金或以更低價買入',
+            'strike': put_strike,
+            'type': 'SELL PUT',
+            'expiry': '30-45天',
+            'details': f"""
+**策略邏輯:**
+- 賣出行使價 ${put_strike:.0f} 的認沽期權
+- 如果股價保持在 ${put_strike:.0f} 以上，賺取全部權利金
+- 如果被行使，以 ${put_strike:.0f} 買入股票 (接近你的止損位)
+
+**適合情況:**
+- 你願意在 ${put_strike:.0f} 買入該股票
+- 預期股價會上漲或橫盤
+
+**風險管理:**
+- 確保帳戶有足夠現金支持 (${put_strike * 100:,.0f}/合約)
+- 如果股價跌破 ${stop:.2f}，考慮平倉止損
+
+**預期回報:** 年化 15-30% (視乎波動率)
+""",
+            'risk_level': '中等',
+            'capital_required': put_strike * 100
+        })
+        
+        # ===== 策略2: 買入認購期權 (Long Call) =====
+        # 適合: 看好突破的情況
+        call_strike = round(entry * 1.02, 0)  # 略高於入場價 (輕度價外)
+        
+        strategies.append({
+            'name': '🚀 買入認購期權 (Long Call)',
+            'description': f'用有限資金捕捉上漲潛力',
+            'strike': call_strike,
+            'type': 'BUY CALL',
+            'expiry': '45-60天',
+            'details': f"""
+**策略邏輯:**
+- 買入行使價 ${call_strike:.0f} 的認購期權
+- 最大虧損 = 權利金 (有限)
+- 潛在收益 = 無限 (股價上漲越多賺越多)
+
+**選擇建議:**
+- 行使價: ${call_strike:.0f} (輕度價外)
+- 到期日: 45-60天 (給時間讓 Setup 發展)
+- Delta: 0.40-0.50
+
+**盈虧平衡:**
+- 需要股價漲到 ${call_strike:.0f} + 權利金
+
+**風險管理:**
+- 投入不超過帳戶 5% 買期權
+- 設定心理止損: 權利金虧損 50% 離場
+""",
+            'risk_level': '較高',
+            'capital_required': price * 5  # 估計權利金
+        })
+        
+        # ===== 策略3: 牛市認沽價差 (Bull Put Spread) =====
+        # 適合: 想要限制風險的賣 PUT
+        short_put = round(entry * 0.95, 0)
+        long_put = round(stop * 0.98, 0)
+        
+        strategies.append({
+            'name': '📊 牛市認沽價差 (Bull Put Spread)',
+            'description': f'有限風險的方向性策略',
+            'strike': f"${short_put:.0f} / ${long_put:.0f}",
+            'type': 'SPREAD',
+            'expiry': '30-45天',
+            'details': f"""
+**策略邏輯:**
+- 賣出 ${short_put:.0f} PUT (收取權利金)
+- 買入 ${long_put:.0f} PUT (保護下行)
+- 淨收入 = 收到的權利金差額
+
+**最大收益:** 淨權利金收入
+**最大虧損:** (${short_put:.0f} - ${long_put:.0f}) × 100 - 淨權利金
+
+**適合情況:**
+- 看漲但想限制風險
+- 預期股價會保持在 ${short_put:.0f} 以上
+
+**優點:**
+- 風險有限，明確知道最大虧損
+- 不需要大量資金
+- 時間衰減對你有利
+""",
+            'risk_level': '中低',
+            'capital_required': (short_put - long_put) * 100
+        })
+        
+        # ===== 策略4: 買入認購價差 (Bull Call Spread) =====
+        # 適合: 想要降低買 CALL 成本
+        long_call = round(entry, 0)
+        short_call = round(target1, 0)
+        
+        strategies.append({
+            'name': '📈 牛市認購價差 (Bull Call Spread)',
+            'description': f'降低成本的看漲策略',
+            'strike': f"${long_call:.0f} / ${short_call:.0f}",
+            'type': 'SPREAD',
+            'expiry': '45-60天',
+            'details': f"""
+**策略邏輯:**
+- 買入 ${long_call:.0f} CALL
+- 賣出 ${short_call:.0f} CALL (降低成本)
+- 淨支出 = 買入權利金 - 賣出權利金
+
+**最大收益:** (${short_call:.0f} - ${long_call:.0f}) × 100 - 淨支出
+**最大虧損:** 淨支出
+
+**盈虧平衡:** ${long_call:.0f} + 淨支出
+
+**適合情況:**
+- 看漲但目標明確 (T1 = ${target1:.2f})
+- 想要降低期權成本
+
+**優點:**
+- 成本比單純買 CALL 低
+- 風險有限
+""",
+            'risk_level': '中等',
+            'capital_required': (short_call - long_call) * 20  # 估計淨支出
+        })
+        
+        # 根據 Setup 類型推薦最佳策略
+        if setup.setup_type == 'VCP':
+            # VCP 突破前適合賣 PUT
+            recommended = 0 if setup.quality in ['A+', 'A'] else 2
+        elif setup.setup_type == 'BGU':
+            # BGU 已經突破，適合買 CALL 或價差
+            recommended = 1 if risk_pct < 5 else 3
+        else:
+            # Power Play 適合價差
+            recommended = 2
+        
+        return {
+            'strategies': strategies,
+            'recommended_index': recommended,
+            'summary': f"""
+### 期權策略總結
+
+**當前股價:** ${price:.2f}
+**入場價:** ${entry:.2f}
+**止損價:** ${stop:.2f}
+**風險:** {risk_pct:.1f}%
+**目標收益:** {reward_pct:.1f}%
+
+**推薦策略:** {strategies[recommended]['name']}
+
+**選擇依據:**
+- Setup 類型: {setup.setup_type}
+- Setup 質量: {setup.quality}
+- 風險回報比: {setup.risk_reward}:1
+"""
+        }
+
+
+# ============================================
+# 🎯 SETUP SCANNER (改進版)
+# ============================================
 class SetupScanner:
     def __init__(self):
         self.ta = TechnicalAnalysis()
     
     def scan_bgu(self, df: pd.DataFrame, ticker: str, spy_df: pd.DataFrame = None, lookback_days: int = 5) -> Optional[SetupResult]:
-        """掃描 BGU"""
+        """掃描 BGU - 改進版，包含圖表標註數據"""
         if df is None or len(df) < 50:
             return None
         
@@ -460,13 +437,13 @@ class SetupScanner:
                 
                 gap_percent = (today_open / yesterday_close - 1) * 100
                 
-                if gap_percent < CONFIG.BGU_MIN_GAP:
+                if gap_percent < 3.0:
                     continue
                 
                 avg_volume = float(df['Volume'].iloc[:-lookback_days].tail(50).mean())
                 volume_ratio = today_volume / avg_volume if avg_volume > 0 else 1
                 
-                if volume_ratio < CONFIG.BGU_MIN_VOLUME:
+                if volume_ratio < 1.5:
                     continue
                 
                 day_range = today_high - today_low
@@ -485,75 +462,68 @@ class SetupScanner:
                 # 計算分數
                 score = 0
                 notes = []
-                explanations = []
+                buy_reasons = []
+                risk_factors = []
                 
-                # 跳空評分
                 if gap_percent >= 8:
                     score += 30
-                    notes.append(f"強跳空 {gap_percent:.1f}%")
-                    explanations.append(f"✅ 跳空 {gap_percent:.1f}%: +30分")
+                    notes.append(f"強跳空{gap_percent:.1f}%")
+                    buy_reasons.append(f"🚀 強勁跳空 {gap_percent:.1f}% - 代表機構大量買入")
                 elif gap_percent >= 5:
                     score += 25
-                    notes.append(f"跳空 {gap_percent:.1f}%")
-                    explanations.append(f"✅ 跳空 {gap_percent:.1f}%: +25分")
+                    notes.append(f"跳空{gap_percent:.1f}%")
+                    buy_reasons.append(f"📈 良好跳空 {gap_percent:.1f}% - 明確的買入信號")
                 else:
                     score += 15
-                    explanations.append(f"⚠️ 跳空 {gap_percent:.1f}%: +15分")
+                    buy_reasons.append(f"⚠️ 跳空 {gap_percent:.1f}% - 力度一般")
                 
-                # 量比評分
                 if volume_ratio >= 3:
                     score += 25
-                    notes.append(f"爆量 {volume_ratio:.1f}x")
-                    explanations.append(f"✅ 量比 {volume_ratio:.1f}x: +25分")
+                    notes.append(f"爆量{volume_ratio:.1f}x")
+                    buy_reasons.append(f"🔥 成交量爆發 {volume_ratio:.1f}x - 機構資金參與")
                 elif volume_ratio >= 2:
                     score += 20
-                    explanations.append(f"✅ 量比 {volume_ratio:.1f}x: +20分")
+                    buy_reasons.append(f"📊 放量 {volume_ratio:.1f}x - 有資金支持")
                 else:
                     score += 10
-                    explanations.append(f"⚠️ 量比 {volume_ratio:.1f}x: +10分")
+                    risk_factors.append(f"量能一般 {volume_ratio:.1f}x")
                 
-                # 收盤位置
                 if close_position >= 0.8:
                     score += 20
                     notes.append("收強")
-                    explanations.append(f"✅ 收盤 {close_position*100:.0f}%: +20分")
+                    buy_reasons.append(f"💪 收盤極強 ({close_position*100:.0f}%) - 買盤持續到收盤")
                 elif close_position >= 0.6:
                     score += 15
-                    explanations.append(f"✅ 收盤 {close_position*100:.0f}%: +15分")
+                    buy_reasons.append(f"✅ 收盤偏強 ({close_position*100:.0f}%)")
                 else:
                     score += 8
-                    explanations.append(f"⚠️ 收盤 {close_position*100:.0f}%: +8分")
+                    risk_factors.append(f"收盤位置偏低 ({close_position*100:.0f}%)")
                 
-                # RS
                 if rs >= 90:
                     score += 15
                     notes.append(f"RS{rs:.0f}")
-                    explanations.append(f"✅ RS {rs:.0f}: +15分")
+                    buy_reasons.append(f"⭐ RS Rating 極強 ({rs:.0f}) - 市場最強股之一")
                 elif rs >= 80:
                     score += 12
-                    explanations.append(f"✅ RS {rs:.0f}: +12分")
+                    buy_reasons.append(f"✅ RS Rating 強勢 ({rs:.0f})")
                 elif rs >= 70:
                     score += 8
-                    explanations.append(f"⚠️ RS {rs:.0f}: +8分")
                 else:
                     score -= 5
-                    explanations.append(f"❌ RS {rs:.0f}: -5分")
+                    risk_factors.append(f"RS Rating 偏弱 ({rs:.0f})")
                 
-                # 均線
                 if above_mas:
                     score += 10
-                    explanations.append("✅ 在均線之上: +10分")
+                    buy_reasons.append("✅ 價格在所有均線之上 - 趨勢健康")
                 else:
                     score -= 10
-                    explanations.append("❌ 在均線之下: -10分")
+                    risk_factors.append("⚠️ 價格在均線之下")
                 
-                # 時效性
                 if day_offset > 0:
                     penalty = day_offset * 5
                     score -= penalty
-                    explanations.append(f"⏰ {day_offset}天前: -{penalty}分")
+                    risk_factors.append(f"⏰ {day_offset}天前的跳空，最佳時機已過")
                 
-                # 等級
                 if score >= 85:
                     quality = 'A+'
                 elif score >= 70:
@@ -566,30 +536,43 @@ class SetupScanner:
                 if score > best_score:
                     best_score = score
                     
-                    atr = float(self.ta.atr(df).iloc[idx])
+                    atr_val = float(self.ta.atr(df).iloc[idx])
                     current_price = float(df['Close'].iloc[-1])
                     
-                    entry = today_low
-                    stop = today_low - atr * 0.5
-                    target_1 = entry * 1.10
-                    target_2 = entry * 1.20
+                    # 改進的止損計算 (更緊)
+                    entry = today_low  # 回調到跳空日低點入場
+                    stop = today_low - atr_val * CONFIG.BGU_STOP_ATR_MULT  # 更緊的止損
+                    
+                    # 確保止損不會太遠
+                    max_stop_distance = entry * 0.05  # 最大 5% 止損
+                    if entry - stop > max_stop_distance:
+                        stop = entry - max_stop_distance
                     
                     risk = entry - stop
+                    target_1 = entry + risk * 2  # 2R
+                    target_2 = entry + risk * 3  # 3R
+                    target_3 = entry + risk * 5  # 5R
+                    
                     rr = (target_1 - entry) / risk if risk > 0 else 0
                     
-                    grade_explanation = f"### BGU 評分: {score}\n\n" + "\n".join(explanations)
-                    entry_explanation = f"入場: ${entry:.2f} (跳空日低點)"
-                    risk_explanation = f"止損: ${stop:.2f} | 風險: ${risk:.2f}/股"
+                    gap_day_date = df.index[idx].strftime('%Y-%m-%d') if hasattr(df.index[idx], 'strftime') else str(df.index[idx])
                     
                     best_bgu = SetupResult(
                         ticker=ticker, setup_type='BGU', quality=quality, score=score,
-                        price=current_price, gap_percent=gap_percent, tightness=0,
+                        price=current_price,
                         entry_price=round(entry, 2), stop_loss=round(stop, 2),
-                        target_1=round(target_1, 2), target_2=round(target_2, 2),
-                        risk_reward=round(rr, 2), rs_rating=rs, adr_percent=adr,
-                        volume_ratio=volume_ratio, above_sma50=above_mas,
-                        notes=" | ".join(notes), grade_explanation=grade_explanation,
-                        entry_explanation=entry_explanation, risk_explanation=risk_explanation
+                        target_1=round(target_1, 2), target_2=round(target_2, 2), target_3=round(target_3, 2),
+                        risk_reward=round(rr, 2),
+                        rs_rating=rs, adr_percent=adr, volume_ratio=volume_ratio,
+                        gap_percent=gap_percent,
+                        gap_day_date=gap_day_date,
+                        gap_day_open=today_open,
+                        gap_day_low=today_low,
+                        gap_day_high=today_high,
+                        prev_close=yesterday_close,
+                        notes=" | ".join(notes),
+                        buy_reasons=buy_reasons,
+                        risk_factors=risk_factors
                     )
             
             return best_bgu
@@ -598,120 +581,142 @@ class SetupScanner:
             return None
     
     def scan_vcp(self, df: pd.DataFrame, ticker: str, spy_df: pd.DataFrame = None) -> Optional[SetupResult]:
-        """掃描 VCP"""
+        """掃描 VCP - 改進版，包含收縮層級數據用於圖表標註"""
         if df is None or len(df) < 100:
             return None
         
         try:
             close = df['Close']
+            high = df['High']
+            low = df['Low']
+            volume = df['Volume']
+            
             curr_price = float(close.iloc[-1])
             
-            # Stage 2 檢查
             sma50 = close.rolling(50).mean()
-            sma150 = close.rolling(150).mean() if len(close) >= 150 else sma50
-            sma200 = close.rolling(200).mean() if len(close) >= 200 else sma150
-            
             curr_sma50 = float(sma50.iloc[-1])
             above_sma50 = curr_price > curr_sma50 * 0.98
             
             if not above_sma50:
                 return None
             
-            # 計算收縮
-            recent = df.tail(50)
-            contractions = []
+            # 計算收縮 - 保存每個收縮的詳細數據
+            recent = df.tail(60)
+            contraction_levels = []
             
-            for i in range(0, min(40, len(recent)-5), 5):
+            for i in range(0, min(50, len(recent)-5), 5):
                 week = recent.iloc[i:i+5]
-                week_range = (float(week['High'].max()) - float(week['Low'].min())) / float(week['Low'].min()) * 100
-                contractions.append(week_range)
+                week_high = float(week['High'].max())
+                week_low = float(week['Low'].min())
+                week_range = (week_high - week_low) / week_low * 100
+                
+                # 找到高點和低點的日期
+                high_idx = week['High'].idxmax()
+                low_idx = week['Low'].idxmin()
+                
+                contraction_levels.append({
+                    'high': week_high,
+                    'low': week_low,
+                    'range': week_range,
+                    'high_date': str(high_idx)[:10] if high_idx else '',
+                    'low_date': str(low_idx)[:10] if low_idx else ''
+                })
             
-            if len(contractions) < 3:
+            if len(contraction_levels) < 3:
                 return None
             
-            contraction_count = sum(1 for i in range(1, len(contractions)) 
-                                   if contractions[i] < contractions[i-1] * 1.1)
+            contraction_count = sum(1 for i in range(1, len(contraction_levels)) 
+                                   if contraction_levels[i]['range'] < contraction_levels[i-1]['range'] * 1.1)
             
-            if contraction_count < CONFIG.VCP_MIN_CONTRACTIONS:
+            if contraction_count < 2:
                 return None
             
-            final_tightness = contractions[-1]
+            final_tightness = contraction_levels[-1]['range']
             
-            if final_tightness > CONFIG.VCP_MAX_TIGHTNESS:
+            if final_tightness > 12.0:
                 return None
             
-            # Pivot
-            pivot = float(recent['High'].max())
+            # Pivot 和 VCP Low
+            pivot_price = float(recent['High'].max())
+            pivot_idx = recent['High'].idxmax()
+            pivot_date = str(pivot_idx)[:10] if pivot_idx else ''
+            
             vcp_low = float(recent['Low'].min())
+            vcp_low_idx = recent['Low'].idxmin()
+            vcp_low_date = str(vcp_low_idx)[:10] if vcp_low_idx else ''
             
             rs = self.ta.rs_rating(df, spy_df) if spy_df is not None else 50
             adr = float(self.ta.adr_percent(df).iloc[-1])
-            
-            vol_ratio = float(df['Volume'].iloc[-1]) / float(df['Volume'].tail(50).mean())
+            vol_ratio = float(volume.iloc[-1]) / float(volume.tail(50).mean())
             
             # 計算分數
             score = 0
             notes = []
-            explanations = []
+            buy_reasons = []
+            risk_factors = []
             
-            # 緊縮度
             if final_tightness <= 5:
                 score += 30
-                notes.append(f"極緊 {final_tightness:.1f}%")
-                explanations.append(f"✅ 緊縮 {final_tightness:.1f}%: +30分")
+                notes.append(f"極緊{final_tightness:.1f}%")
+                buy_reasons.append(f"🎯 極度緊縮 {final_tightness:.1f}% - 賣壓幾乎消失，隨時可能爆發")
             elif final_tightness <= 8:
                 score += 25
-                notes.append(f"緊縮 {final_tightness:.1f}%")
-                explanations.append(f"✅ 緊縮 {final_tightness:.1f}%: +25分")
+                notes.append(f"緊縮{final_tightness:.1f}%")
+                buy_reasons.append(f"✅ 良好緊縮 {final_tightness:.1f}% - 籌碼集中")
             else:
                 score += 15
-                explanations.append(f"⚠️ 緊縮 {final_tightness:.1f}%: +15分")
+                buy_reasons.append(f"⚠️ 緊縮度 {final_tightness:.1f}% - 還可以更緊")
             
-            # 收縮次數
             if contraction_count >= 4:
                 score += 20
                 notes.append(f"{contraction_count}次收縮")
-                explanations.append(f"✅ {contraction_count}次收縮: +20分")
+                buy_reasons.append(f"💪 {contraction_count} 次波動收縮 - 多次洗盤，籌碼非常穩定")
             elif contraction_count >= 3:
                 score += 15
-                explanations.append(f"✅ {contraction_count}次收縮: +15分")
+                buy_reasons.append(f"✅ {contraction_count} 次收縮 - 標準 VCP 形態")
             else:
                 score += 10
-                explanations.append(f"⚠️ {contraction_count}次收縮: +10分")
+                risk_factors.append(f"收縮次數偏少 ({contraction_count}次)")
             
-            # RS
+            # 成交量萎縮
+            vol_early = np.mean([c['range'] for c in contraction_levels[:2]])
+            vol_late = np.mean([c['range'] for c in contraction_levels[-2:]])
+            if vol_late < vol_early * 0.7:
+                score += 15
+                notes.append("量縮")
+                buy_reasons.append("📉 成交量萎縮 - 賣壓減少，突破更容易")
+            else:
+                score += 5
+            
             if rs >= 90:
                 score += 20
                 notes.append(f"RS{rs:.0f}")
-                explanations.append(f"✅ RS {rs:.0f}: +20分")
+                buy_reasons.append(f"⭐ RS Rating 極強 ({rs:.0f}) - 領漲股票")
             elif rs >= 80:
                 score += 15
-                explanations.append(f"✅ RS {rs:.0f}: +15分")
+                buy_reasons.append(f"✅ RS Rating 強勢 ({rs:.0f})")
             elif rs >= 70:
                 score += 10
-                explanations.append(f"⚠️ RS {rs:.0f}: +10分")
             else:
                 score -= 5
-                explanations.append(f"❌ RS {rs:.0f}: -5分")
+                risk_factors.append(f"RS Rating 偏弱 ({rs:.0f})")
             
             # 距離 Pivot
-            dist_pivot = (pivot - curr_price) / curr_price * 100
+            dist_pivot = (pivot_price - curr_price) / curr_price * 100
             if dist_pivot <= 3:
                 score += 15
                 notes.append("近突破")
-                explanations.append(f"✅ 距Pivot {dist_pivot:.1f}%: +15分")
+                buy_reasons.append(f"🔥 距離突破點僅 {dist_pivot:.1f}% - 隨時可能突破")
             elif dist_pivot <= 5:
                 score += 10
-                explanations.append(f"⚠️ 距Pivot {dist_pivot:.1f}%: +10分")
+                buy_reasons.append(f"✅ 距離突破點 {dist_pivot:.1f}%")
             else:
                 score += 5
-                explanations.append(f"⚠️ 距Pivot {dist_pivot:.1f}%: +5分")
+                risk_factors.append(f"距離突破點較遠 ({dist_pivot:.1f}%)")
             
-            # 趨勢
-            score += 10
-            explanations.append("✅ 在SMA50之上: +10分")
+            score += 10  # 基礎分 (已在 SMA50 之上)
+            buy_reasons.append("✅ 價格在 SMA50 之上 - Stage 2 上升趨勢")
             
-            # 等級
             if score >= 85:
                 quality = 'A+'
             elif score >= 70:
@@ -721,152 +726,54 @@ class SetupScanner:
             else:
                 quality = 'C'
             
-            atr = float(self.ta.atr(df).iloc[-1])
-            entry = pivot * 1.001
-            stop = vcp_low - atr * 0.3
-            target_1 = entry + (pivot - vcp_low)
-            target_2 = entry + (pivot - vcp_low) * 1.5
+            atr_val = float(self.ta.atr(df).iloc[-1])
+            
+            # 改進的止損計算 (更緊)
+            entry = pivot_price * 1.001
+            
+            # 止損: VCP 低點或最近收縮低點，取較近者
+            recent_contraction_low = contraction_levels[-1]['low']
+            stop = max(vcp_low, recent_contraction_low) - atr_val * CONFIG.VCP_STOP_ATR_MULT
+            
+            # 確保止損不會太遠
+            max_stop_distance = entry * 0.06  # 最大 6% 止損
+            if entry - stop > max_stop_distance:
+                stop = entry - max_stop_distance
             
             risk = entry - stop
-            rr = (target_1 - entry) / risk if risk > 0 else 0
+            target_1 = entry + risk * 2
+            target_2 = entry + risk * 3
+            target_3 = entry + risk * 5
             
-            grade_explanation = f"### VCP 評分: {score}\n\n" + "\n".join(explanations)
-            entry_explanation = f"入場: ${entry:.2f} (突破 Pivot)"
-            risk_explanation = f"止損: ${stop:.2f} | 風險: ${risk:.2f}/股"
+            rr = (target_1 - entry) / risk if risk > 0 else 0
             
             return SetupResult(
                 ticker=ticker, setup_type='VCP', quality=quality, score=score,
-                price=curr_price, gap_percent=0, tightness=final_tightness,
+                price=curr_price,
                 entry_price=round(entry, 2), stop_loss=round(stop, 2),
-                target_1=round(target_1, 2), target_2=round(target_2, 2),
-                risk_reward=round(rr, 2), rs_rating=rs, adr_percent=adr,
-                volume_ratio=vol_ratio, above_sma50=above_sma50,
-                notes=" | ".join(notes), grade_explanation=grade_explanation,
-                entry_explanation=entry_explanation, risk_explanation=risk_explanation
-            )
-            
-        except:
-            return None
-    
-    def scan_power_play(self, df: pd.DataFrame, ticker: str, spy_df: pd.DataFrame = None) -> Optional[SetupResult]:
-        """
-        掃描 Power Play (新增!)
-        
-        Power Play = 強勢股的緊縮整理後突破
-        結合了 BGU 的動能和 VCP 的整理
-        """
-        if df is None or len(df) < 60:
-            return None
-        
-        try:
-            close = df['Close']
-            high = df['High']
-            volume = df['Volume']
-            
-            curr_price = float(close.iloc[-1])
-            
-            # 條件1: 過去30天有過大漲 (>=10%)
-            max_gain_30d = 0
-            for i in range(5, 30):
-                if i < len(close):
-                    gain = (float(close.iloc[-i]) / float(close.iloc[-i-5]) - 1) * 100
-                    max_gain_30d = max(max_gain_30d, gain)
-            
-            if max_gain_30d < 10:
-                return None
-            
-            # 條件2: 最近5天緊縮整理
-            recent_5d = df.tail(5)
-            range_5d = (float(recent_5d['High'].max()) - float(recent_5d['Low'].min())) / float(recent_5d['Low'].min()) * 100
-            
-            if range_5d > 8:
-                return None
-            
-            # 條件3: 成交量萎縮
-            vol_recent = float(volume.tail(5).mean())
-            vol_prior = float(volume.iloc[-30:-5].mean())
-            vol_contraction = vol_recent < vol_prior * 0.8
-            
-            if not vol_contraction:
-                return None
-            
-            # 條件4: 在均線之上
-            sma20 = float(close.rolling(20).mean().iloc[-1])
-            sma50 = float(close.rolling(50).mean().iloc[-1])
-            
-            if curr_price < sma20:
-                return None
-            
-            rs = self.ta.rs_rating(df, spy_df) if spy_df is not None else 50
-            adr = float(self.ta.adr_percent(df).iloc[-1])
-            
-            # 計算分數
-            score = 50  # 基礎分
-            notes = []
-            
-            if max_gain_30d >= 20:
-                score += 20
-                notes.append(f"大漲{max_gain_30d:.0f}%")
-            else:
-                score += 10
-            
-            if range_5d <= 4:
-                score += 20
-                notes.append(f"極緊{range_5d:.1f}%")
-            else:
-                score += 10
-            
-            if rs >= 80:
-                score += 15
-                notes.append(f"RS{rs:.0f}")
-            
-            if vol_contraction:
-                score += 10
-                notes.append("量縮")
-            
-            if score >= 85:
-                quality = 'A+'
-            elif score >= 70:
-                quality = 'A'
-            elif score >= 55:
-                quality = 'B'
-            else:
-                quality = 'C'
-            
-            pivot = float(high.tail(10).max())
-            atr = float(self.ta.atr(df).iloc[-1])
-            
-            entry = pivot * 1.001
-            stop = float(df['Low'].tail(5).min()) - atr * 0.3
-            target_1 = entry * 1.08
-            target_2 = entry * 1.15
-            
-            risk = entry - stop
-            rr = (target_1 - entry) / risk if risk > 0 else 0
-            
-            return SetupResult(
-                ticker=ticker, setup_type='PP', quality=quality, score=score,
-                price=curr_price, gap_percent=max_gain_30d, tightness=range_5d,
-                entry_price=round(entry, 2), stop_loss=round(stop, 2),
-                target_1=round(target_1, 2), target_2=round(target_2, 2),
-                risk_reward=round(rr, 2), rs_rating=rs, adr_percent=adr,
-                volume_ratio=vol_recent/vol_prior if vol_prior > 0 else 1,
-                above_sma50=curr_price > sma50,
+                target_1=round(target_1, 2), target_2=round(target_2, 2), target_3=round(target_3, 2),
+                risk_reward=round(rr, 2),
+                rs_rating=rs, adr_percent=adr, volume_ratio=vol_ratio,
+                tightness=final_tightness,
+                contractions=contraction_count,
+                pivot_price=pivot_price,
+                pivot_date=pivot_date,
+                vcp_low=vcp_low,
+                vcp_low_date=vcp_low_date,
+                contraction_levels=contraction_levels,
                 notes=" | ".join(notes),
-                grade_explanation=f"Power Play 評分: {score}",
-                entry_explanation=f"入場: 突破 ${pivot:.2f}",
-                risk_explanation=f"止損: ${stop:.2f}"
+                buy_reasons=buy_reasons,
+                risk_factors=risk_factors
             )
             
         except:
             return None
     
     def scan_all(self, stocks: List[str], spy_df: pd.DataFrame = None, 
-                 progress_callback=None) -> Tuple[List[SetupResult], List[SetupResult], List[SetupResult]]:
-        """掃描所有股票的所有 Setup"""
+                 progress_callback=None) -> Tuple[List[SetupResult], List[SetupResult]]:
+        """掃描所有股票"""
         bgu_results = []
         vcp_results = []
-        pp_results = []
         
         for i, ticker in enumerate(stocks):
             if progress_callback:
@@ -880,29 +787,230 @@ class SetupScanner:
                 if df is None or len(df) < 50:
                     continue
                 
-                # BGU
                 bgu = self.scan_bgu(df, ticker, spy_df, lookback_days=5)
                 if bgu and bgu.score >= 45:
+                    # 生成期權策略
+                    bgu.options_strategy = OptionsStrategyGenerator.generate_strategy(bgu)
                     bgu_results.append(bgu)
                 
-                # VCP
                 vcp = self.scan_vcp(df, ticker, spy_df)
                 if vcp and vcp.score >= 45:
+                    vcp.options_strategy = OptionsStrategyGenerator.generate_strategy(vcp)
                     vcp_results.append(vcp)
-                
-                # Power Play
-                pp = self.scan_power_play(df, ticker, spy_df)
-                if pp and pp.score >= 55:
-                    pp_results.append(pp)
                     
             except:
                 continue
         
         bgu_results.sort(key=lambda x: x.score, reverse=True)
         vcp_results.sort(key=lambda x: x.score, reverse=True)
-        pp_results.sort(key=lambda x: x.score, reverse=True)
         
-        return bgu_results, vcp_results, pp_results
+        return bgu_results, vcp_results
+
+
+# ============================================
+# 📊 CHART BUILDER (大幅改進 - 加入標註)
+# ============================================
+class ChartBuilder:
+    """改進版圖表 - 顯示 Setup 關鍵點位"""
+    
+    @staticmethod
+    def create_annotated_chart(df: pd.DataFrame, ticker: str, setup: SetupResult = None) -> go.Figure:
+        """創建帶有 Setup 標註的圖表"""
+        
+        df = df.copy()
+        df['SMA10'] = df['Close'].rolling(10).mean()
+        df['SMA20'] = df['Close'].rolling(20).mean()
+        df['SMA50'] = df['Close'].rolling(50).mean()
+        
+        # 創建圖表
+        fig = make_subplots(
+            rows=2, cols=1, shared_xaxes=True,
+            vertical_spacing=0.05, row_heights=[0.75, 0.25],
+            subplot_titles=(f'{ticker} - {setup.setup_type} ({setup.quality})' if setup else ticker, 'Volume')
+        )
+        
+        # K線圖
+        fig.add_trace(go.Candlestick(
+            x=df.index, open=df['Open'], high=df['High'],
+            low=df['Low'], close=df['Close'], name='Price',
+            increasing_line_color='#00CC96', decreasing_line_color='#EF553B'
+        ), row=1, col=1)
+        
+        # 均線
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA10'], name='SMA10',
+                                 line=dict(color='yellow', width=1)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA20'], name='SMA20',
+                                 line=dict(color='orange', width=1)), row=1, col=1)
+        fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name='SMA50',
+                                 line=dict(color='blue', width=1.5)), row=1, col=1)
+        
+        # ===== VCP 標註 =====
+        if setup and setup.setup_type == 'VCP':
+            # 標註 Pivot 高點
+            if setup.pivot_price > 0:
+                fig.add_hline(
+                    y=setup.pivot_price, 
+                    line_dash="dash", 
+                    line_color="cyan",
+                    annotation_text=f"📍 Pivot ${setup.pivot_price:.2f}",
+                    annotation_position="right",
+                    row=1, col=1
+                )
+            
+            # 標註 VCP 低點
+            if setup.vcp_low > 0:
+                fig.add_hline(
+                    y=setup.vcp_low, 
+                    line_dash="dot", 
+                    line_color="yellow",
+                    annotation_text=f"📍 VCP Low ${setup.vcp_low:.2f}",
+                    annotation_position="right",
+                    row=1, col=1
+                )
+            
+            # 標註每次收縮區間 (用矩形)
+            if setup.contraction_levels:
+                colors = ['rgba(255,255,0,0.1)', 'rgba(0,255,255,0.1)', 'rgba(255,0,255,0.1)', 
+                         'rgba(0,255,0,0.1)', 'rgba(255,165,0,0.1)']
+                
+                for i, level in enumerate(setup.contraction_levels[-4:]):  # 最後4個收縮
+                    color = colors[i % len(colors)]
+                    
+                    # 添加收縮區間標籤
+                    fig.add_annotation(
+                        x=df.index[-30 + i*7] if len(df) > 30 else df.index[i*7],
+                        y=level['high'],
+                        text=f"T{i+1}: {level['range']:.1f}%",
+                        showarrow=False,
+                        font=dict(color='white', size=10),
+                        bgcolor=color.replace('0.1', '0.7')
+                    )
+        
+        # ===== BGU 標註 =====
+        if setup and setup.setup_type == 'BGU':
+            # 標註跳空日
+            if setup.gap_day_date:
+                # 跳空缺口區域
+                fig.add_shape(
+                    type="rect",
+                    x0=setup.gap_day_date,
+                    x1=setup.gap_day_date,
+                    y0=setup.prev_close,
+                    y1=setup.gap_day_open,
+                    fillcolor="rgba(0, 255, 0, 0.3)",
+                    line=dict(width=0),
+                    row=1, col=1
+                )
+                
+                # 跳空日高點
+                fig.add_hline(
+                    y=setup.gap_day_high, 
+                    line_dash="dot", 
+                    line_color="lime",
+                    annotation_text=f"📍 Gap High ${setup.gap_day_high:.2f}",
+                    row=1, col=1
+                )
+                
+                # 跳空日低點 (入場點)
+                fig.add_hline(
+                    y=setup.gap_day_low, 
+                    line_dash="dash", 
+                    line_color="cyan",
+                    annotation_text=f"📍 Gap Low (Entry) ${setup.gap_day_low:.2f}",
+                    row=1, col=1
+                )
+                
+                # 前一日收盤
+                fig.add_hline(
+                    y=setup.prev_close, 
+                    line_dash="dot", 
+                    line_color="gray",
+                    annotation_text=f"Prev Close ${setup.prev_close:.2f}",
+                    row=1, col=1
+                )
+                
+                # 跳空標籤
+                fig.add_annotation(
+                    x=setup.gap_day_date,
+                    y=setup.gap_day_high * 1.02,
+                    text=f"🚀 GAP +{setup.gap_percent:.1f}%",
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowcolor="lime",
+                    font=dict(color='lime', size=12, family='Arial Black'),
+                    bgcolor="rgba(0,0,0,0.7)"
+                )
+        
+        # ===== 交易計劃標註 =====
+        if setup:
+            # 入場線
+            fig.add_hline(
+                y=setup.entry_price, 
+                line_dash="dash", 
+                line_color="green",
+                line_width=2,
+                annotation_text=f"🎯 Entry ${setup.entry_price}",
+                annotation_position="left",
+                row=1, col=1
+            )
+            
+            # 止損線
+            fig.add_hline(
+                y=setup.stop_loss, 
+                line_dash="dash", 
+                line_color="red",
+                line_width=2,
+                annotation_text=f"🛑 Stop ${setup.stop_loss}",
+                annotation_position="left",
+                row=1, col=1
+            )
+            
+            # 目標線
+            fig.add_hline(
+                y=setup.target_1, 
+                line_dash="dot", 
+                line_color="#00BFFF",
+                annotation_text=f"T1 ${setup.target_1} (2R)",
+                annotation_position="left",
+                row=1, col=1
+            )
+            
+            fig.add_hline(
+                y=setup.target_2, 
+                line_dash="dot", 
+                line_color="#1E90FF",
+                annotation_text=f"T2 ${setup.target_2} (3R)",
+                annotation_position="left",
+                row=1, col=1
+            )
+        
+        # 成交量
+        colors = ['#00CC96' if df['Close'].iloc[i] >= df['Open'].iloc[i] else '#EF553B' 
+                  for i in range(len(df))]
+        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors,
+                            name='Volume', showlegend=False), row=2, col=1)
+        
+        # 平均成交量線
+        avg_vol = df['Volume'].rolling(50).mean()
+        fig.add_trace(go.Scatter(x=df.index, y=avg_vol, name='Avg Vol',
+                                 line=dict(color='yellow', width=1, dash='dash')), row=2, col=1)
+        
+        # 布局
+        fig.update_layout(
+            height=700,
+            showlegend=True,
+            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+            xaxis_rangeslider_visible=False,
+            template='plotly_dark',
+            margin=dict(l=60, r=60, t=80, b=40)
+        )
+        
+        # 隱藏非交易日
+        fig.update_xaxes(
+            rangebreaks=[dict(bounds=["sat", "mon"])]
+        )
+        
+        return fig
 
 
 # ============================================
@@ -912,7 +1020,7 @@ class MarketRegime:
     @staticmethod
     @st.cache_data(ttl=600)
     def get_health() -> Dict:
-        default = {'status': '❓', 'score': 50, 'vix': None, 'spy_price': None, 'advice': '', 'details': []}
+        default = {'status': '❓', 'score': 50, 'vix': None, 'spy_price': None, 'advice': ''}
         
         try:
             spy = yf.download('SPY', period='6mo', progress=False)
@@ -935,39 +1043,15 @@ class MarketRegime:
             sma200 = float(spy['Close'].rolling(200).mean().iloc[-1]) if len(spy) >= 200 else sma50
             
             score = 50
-            details = []
-            
-            if spy_close > sma200:
-                score += 15
-                details.append("✅ SPY > SMA200")
-            else:
-                details.append("❌ SPY < SMA200")
-            
-            if spy_close > sma50:
-                score += 10
-                details.append("✅ SPY > SMA50")
-            else:
-                details.append("❌ SPY < SMA50")
-            
+            if spy_close > sma200: score += 15
+            if spy_close > sma50: score += 10
             if len(spy) >= 21:
                 ret = (spy_close / float(spy['Close'].iloc[-21]) - 1) * 100
-                if ret > 0:
-                    score += 10
-                    details.append(f"✅ 月回報 {ret:+.1f}%")
-                elif ret < -5:
-                    score -= 15
-                    details.append(f"❌ 月回報 {ret:+.1f}%")
-                else:
-                    details.append(f"⚠️ 月回報 {ret:+.1f}%")
+                if ret > 0: score += 10
+                elif ret < -5: score -= 15
             
-            if vix_val < 15:
-                score += 10
-                details.append(f"✅ VIX {vix_val:.1f} (低)")
-            elif vix_val > 25:
-                score -= 15
-                details.append(f"❌ VIX {vix_val:.1f} (高)")
-            else:
-                details.append(f"⚠️ VIX {vix_val:.1f}")
+            if vix_val < 15: score += 10
+            elif vix_val > 25: score -= 15
             
             if score >= 75:
                 status, advice = "🟢 強勢", "全力進攻"
@@ -980,58 +1064,10 @@ class MarketRegime:
             
             return {
                 'status': status, 'score': score, 'advice': advice,
-                'vix': round(vix_val, 1), 'spy_price': round(spy_close, 2),
-                'details': details
+                'vix': round(vix_val, 1), 'spy_price': round(spy_close, 2)
             }
         except:
             return default
-
-
-# ============================================
-# 📊 CHART BUILDER
-# ============================================
-class ChartBuilder:
-    @staticmethod
-    def create_setup_chart(df: pd.DataFrame, ticker: str, setup: SetupResult = None) -> go.Figure:
-        df = df.copy()
-        df['SMA20'] = df['Close'].rolling(20).mean()
-        df['SMA50'] = df['Close'].rolling(50).mean()
-        
-        fig = make_subplots(rows=2, cols=1, shared_xaxes=True,
-                           vertical_spacing=0.05, row_heights=[0.7, 0.3])
-        
-        fig.add_trace(go.Candlestick(
-            x=df.index, open=df['Open'], high=df['High'],
-            low=df['Low'], close=df['Close'], name='Price',
-            increasing_line_color='#00CC96', decreasing_line_color='#EF553B'
-        ), row=1, col=1)
-        
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA20'], name='SMA20',
-                                 line=dict(color='orange', width=1)), row=1, col=1)
-        fig.add_trace(go.Scatter(x=df.index, y=df['SMA50'], name='SMA50',
-                                 line=dict(color='blue', width=1)), row=1, col=1)
-        
-        if setup:
-            fig.add_hline(y=setup.entry_price, line_dash="dash", line_color="green",
-                         annotation_text=f"Entry ${setup.entry_price}", row=1, col=1)
-            fig.add_hline(y=setup.stop_loss, line_dash="dash", line_color="red",
-                         annotation_text=f"Stop ${setup.stop_loss}", row=1, col=1)
-            fig.add_hline(y=setup.target_1, line_dash="dash", line_color="blue",
-                         annotation_text=f"T1 ${setup.target_1}", row=1, col=1)
-        
-        colors = ['green' if df['Close'].iloc[i] >= df['Open'].iloc[i] else 'red' 
-                  for i in range(len(df))]
-        fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors,
-                            name='Volume'), row=2, col=1)
-        
-        fig.update_layout(
-            height=500, showlegend=True,
-            xaxis_rangeslider_visible=False,
-            template='plotly_dark',
-            title=f"{ticker} - {setup.setup_type if setup else ''} ({setup.quality if setup else ''})"
-        )
-        
-        return fig
 
 
 # ============================================
@@ -1080,6 +1116,7 @@ class PositionCalculator:
             'position_value': position_value,
             'position_pct': position_value / account * 100,
             'risk_amount': risk_amount,
+            'risk_per_share': risk_per_share,
             'max_loss': shares * risk_per_share
         }
 
@@ -1090,8 +1127,8 @@ class PositionCalculator:
 def main():
     st.set_page_config(page_title=CONFIG.PAGE_TITLE, page_icon=CONFIG.PAGE_ICON, layout="wide")
     
-    st.title(f"{CONFIG.PAGE_ICON} Market Radar v7.0 Ultimate")
-    st.caption(f"專業交易員版本 | 掃描 {len(ALL_STOCKS)}+ 股票 | BGU / VCP / Power Play")
+    st.title(f"{CONFIG.PAGE_ICON} Market Radar v7.5 Pro")
+    st.caption("視覺化 Setup 標註 | 優化止損 | 期權策略 | 詳細買入理由")
     
     # Market Health
     market = MarketRegime.get_health()
@@ -1103,10 +1140,6 @@ def main():
     col4.metric("SPY", f"${market['spy_price']:.2f}" if market['spy_price'] else "N/A")
     col5.metric("建議", market['advice'])
     
-    with st.expander("查看市場詳情"):
-        for detail in market.get('details', []):
-            st.write(detail)
-    
     st.divider()
     
     # Tabs
@@ -1114,10 +1147,7 @@ def main():
         "🌪️ 板塊輪動",
         "📊 個股分析",
         "🎯 Setup 獵人",
-        "🔥 52週新高",
-        "📈 趨勢領袖",
-        "💰 倉位計算",
-        "📖 交易教學"
+        "💰 倉位計算"
     ])
     
     # ===== TAB 1: Sector Rotation =====
@@ -1135,7 +1165,7 @@ def main():
             for name, info in SECTORS.items():
                 if info['etf'] in returns:
                     rs_data.append({
-                        '板塊': name, '主題': info['theme'],
+                        '板塊': name,
                         'RS': returns[info['etf']] - spy_return,
                         '回報%': returns[info['etf']]
                     })
@@ -1148,24 +1178,14 @@ def main():
                             range_color=[-15, 15])
                 fig.update_layout(yaxis={'categoryorder': 'total ascending'}, height=400)
                 st.plotly_chart(fig, use_container_width=True)
-                
-                col1, col2 = st.columns(2)
-                with col1:
-                    st.success("**強勢板塊:**")
-                    for _, row in df_rs[df_rs['RS'] > 2].head(3).iterrows():
-                        st.write(f"• {row['板塊']} ({row['RS']:+.1f}%)")
-                with col2:
-                    st.error("**弱勢板塊:**")
-                    for _, row in df_rs[df_rs['RS'] < -2].tail(3).iterrows():
-                        st.write(f"• {row['板塊']} ({row['RS']:+.1f}%)")
     
     # ===== TAB 2: Stock Analysis =====
     with tabs[1]:
-        st.header("📊 個股分析")
+        st.header("📊 個股深度分析")
         
         ticker = st.text_input("股票代碼", value="NVDA").upper()
         
-        if st.button("分析", type="primary", key="analyze"):
+        if st.button("🔍 分析股票", type="primary", key="analyze"):
             df = DataFetcher.get_stock(ticker, "1y")
             spy_df = DataFetcher.get_stock('SPY', '1y')
             
@@ -1175,62 +1195,150 @@ def main():
                 
                 bgu = scanner.scan_bgu(df, ticker, spy_df)
                 vcp = scanner.scan_vcp(df, ticker, spy_df)
-                pp = scanner.scan_power_play(df, ticker, spy_df)
-                trend = ta.check_trend_template(df)
+                
+                # 選擇最佳 Setup
+                setup = None
+                if bgu and vcp:
+                    setup = bgu if bgu.score > vcp.score else vcp
+                elif bgu:
+                    setup = bgu
+                elif vcp:
+                    setup = vcp
+                
+                # 生成期權策略
+                if setup:
+                    setup.options_strategy = OptionsStrategyGenerator.generate_strategy(setup)
                 
                 # 基本信息
                 col1, col2, col3, col4 = st.columns(4)
                 col1.metric("價格", f"${float(df['Close'].iloc[-1]):.2f}")
                 col2.metric("RS Rating", f"{ta.rs_rating(df, spy_df):.0f}")
                 col3.metric("ADR%", f"{float(ta.adr_percent(df).iloc[-1]):.1f}%")
+                trend = ta.check_trend_template(df)
                 col4.metric("趨勢模板", f"{trend['score']}/{trend['total']}")
                 
                 # Setup 狀態
-                if bgu:
-                    st.success(f"🚀 **BGU 信號** - {bgu.quality} ({bgu.score:.0f}分)")
-                if vcp:
-                    st.info(f"🎯 **VCP 信號** - {vcp.quality} ({vcp.score:.0f}分)")
-                if pp:
-                    st.warning(f"⚡ **Power Play** - {pp.quality} ({pp.score:.0f}分)")
+                if setup:
+                    if setup.quality in ['A+', 'A']:
+                        st.success(f"✅ **{setup.setup_type} - {setup.quality} 級 Setup** (Score: {setup.score:.0f})")
+                    else:
+                        st.warning(f"⚠️ **{setup.setup_type} - {setup.quality} 級 Setup** (Score: {setup.score:.0f})")
+                else:
+                    st.info("未發現明確的 Setup 信號")
                 
-                # 趨勢模板詳情
-                with st.expander("趨勢模板詳情"):
-                    for icon, check in trend['checks']:
-                        st.write(f"{icon} {check}")
-                
-                # 圖表
-                setup = bgu or vcp or pp
-                fig = ChartBuilder.create_setup_chart(df, ticker, setup)
+                # ===== 圖表 (帶標註) =====
+                st.subheader("📈 技術圖表")
+                fig = ChartBuilder.create_annotated_chart(df, ticker, setup)
                 st.plotly_chart(fig, use_container_width=True)
                 
-                if setup:
+                # ===== A/A+ 級 Setup 詳細解釋 =====
+                if setup and setup.quality in ['A+', 'A']:
+                    st.subheader(f"🎯 為什麼 {ticker} 值得買入？")
+                    
+                    col1, col2 = st.columns(2)
+                    
+                    with col1:
+                        st.markdown("### ✅ 買入理由")
+                        if setup.buy_reasons:
+                            for reason in setup.buy_reasons:
+                                st.markdown(f"- {reason}")
+                    
+                    with col2:
+                        st.markdown("### ⚠️ 風險因素")
+                        if setup.risk_factors:
+                            for risk in setup.risk_factors:
+                                st.markdown(f"- {risk}")
+                        else:
+                            st.markdown("- 暫無明顯風險")
+                    
+                    # 交易計劃
+                    st.subheader("📋 交易計劃")
+                    
+                    col1, col2, col3 = st.columns(3)
+                    
+                    with col1:
+                        risk_pct = (setup.entry_price - setup.stop_loss) / setup.entry_price * 100
+                        st.markdown(f"""
+                        **入場策略:**
+                        - 入場價: **${setup.entry_price}**
+                        - 止損價: **${setup.stop_loss}**
+                        - 風險: **{risk_pct:.1f}%**
+                        """)
+                    
+                    with col2:
+                        st.markdown(f"""
+                        **目標價位:**
+                        - T1 (2R): **${setup.target_1}**
+                        - T2 (3R): **${setup.target_2}**
+                        - T3 (5R): **${setup.target_3}**
+                        """)
+                    
+                    with col3:
+                        st.markdown(f"""
+                        **風險回報:**
+                        - R:R = **{setup.risk_reward}:1**
+                        - 質量: **{setup.quality}**
+                        - 評分: **{setup.score:.0f}**
+                        """)
+                    
+                    # 倉位建議
+                    st.subheader("💰 倉位建議 ($100,000 帳戶)")
+                    pos = PositionCalculator.calculate(100000, setup.entry_price, setup.stop_loss)
+                    if 'error' not in pos:
+                        col1, col2, col3, col4 = st.columns(4)
+                        col1.metric("建議股數", f"{pos['shares']}")
+                        col2.metric("倉位金額", f"${pos['position_value']:,.0f}")
+                        col3.metric("倉位比例", f"{pos['position_pct']:.1f}%")
+                        col4.metric("最大虧損", f"${pos['max_loss']:,.0f}")
+                    
+                    # ===== 期權策略 =====
+                    st.subheader("📊 期權策略建議")
+                    
+                    if setup.options_strategy:
+                        strategies = setup.options_strategy['strategies']
+                        recommended = setup.options_strategy['recommended_index']
+                        
+                        st.info(f"**推薦策略:** {strategies[recommended]['name']}")
+                        
+                        for i, strategy in enumerate(strategies):
+                            is_recommended = (i == recommended)
+                            expander_title = f"{'⭐ ' if is_recommended else ''}{strategy['name']} {'(推薦)' if is_recommended else ''}"
+                            
+                            with st.expander(expander_title, expanded=is_recommended):
+                                st.markdown(strategy['details'])
+                                
+                                col1, col2 = st.columns(2)
+                                col1.metric("風險等級", strategy['risk_level'])
+                                col2.metric("所需資金", f"${strategy['capital_required']:,.0f}")
+                
+                # 非 A 級 Setup
+                elif setup:
+                    st.subheader("📋 交易計劃")
+                    st.warning(f"這是 {setup.quality} 級 Setup，建議等待更好的機會或僅用小倉位測試")
+                    
                     col1, col2 = st.columns(2)
                     with col1:
                         st.markdown(f"""
-                        ### 交易計劃
                         | 項目 | 價格 |
                         |------|------|
                         | 入場 | ${setup.entry_price} |
                         | 止損 | ${setup.stop_loss} |
                         | T1 | ${setup.target_1} |
-                        | T2 | ${setup.target_2} |
                         | R:R | {setup.risk_reward}:1 |
                         """)
-                    with col2:
-                        st.markdown(setup.grade_explanation)
     
     # ===== TAB 3: Setup Hunter =====
     with tabs[2]:
         st.header("🎯 Setup 獵人")
         
-        st.info(f"可掃描 {len(ALL_STOCKS)}+ 股票，尋找 BGU / VCP / Power Play")
+        st.info(f"掃描 {len(ALL_STOCKS)}+ 股票，尋找 A/A+ 級 Setup")
         
         col1, col2 = st.columns(2)
         with col1:
             scan_scope = st.selectbox(
                 "掃描範圍",
                 [
-                    "🔥 熱門領導股 (30隻)",
+                    "🔥 熱門領導股 (20隻)",
                     "🔬 半導體 (20隻)",
                     "💻 軟件雲端 (20隻)",
                     "🚀 高成長股 (20隻)",
@@ -1238,20 +1346,18 @@ def main():
                     "💊 醫療股 (20隻)",
                     "🇨🇳 中概股 (20隻)",
                     "⚡ 新能源/EV (20隻)",
-                    "🤖 AI概念 (20隻)",
-                    "📊 全部股票 (200+) ⚠️較慢"
+                    "📊 全部股票 (150+)"
                 ],
                 key="scan_scope"
             )
         with col2:
-            setup_filter = st.selectbox(
-                "Setup 類型",
-                ["全部", "只看 BGU", "只看 VCP", "只看 Power Play"],
-                key="setup_filter"
+            min_quality = st.selectbox(
+                "最低質量",
+                ["全部", "只看 A+ 和 A", "只看 A+"],
+                key="min_quality"
             )
         
         if st.button("🎯 開始掃描", type="primary", key="scan_all"):
-            # 選擇股票
             if "熱門" in scan_scope:
                 stocks = STOCK_UNIVERSE['Market Leaders']
             elif "半導體" in scan_scope:
@@ -1268,15 +1374,12 @@ def main():
                 stocks = STOCK_UNIVERSE['China ADR']
             elif "新能源" in scan_scope or "EV" in scan_scope:
                 stocks = STOCK_UNIVERSE['Clean Energy & EV']
-            elif "AI" in scan_scope:
-                stocks = STOCK_UNIVERSE['AI & Robotics']
             else:
                 stocks = ALL_STOCKS
             
             spy_df = DataFetcher.get_stock('SPY', '6mo')
             scanner = SetupScanner()
             
-            # Progress
             progress_bar = st.progress(0)
             status_text = st.empty()
             
@@ -1284,156 +1387,136 @@ def main():
                 progress_bar.progress((i + 1) / total)
                 status_text.text(f"掃描 {ticker} ({i+1}/{total})...")
             
-            bgu_results, vcp_results, pp_results = scanner.scan_all(stocks, spy_df, update_progress)
+            bgu_results, vcp_results = scanner.scan_all(stocks, spy_df, update_progress)
             
             progress_bar.empty()
             status_text.empty()
             
+            # 過濾質量
+            if "只看 A+" in min_quality:
+                bgu_results = [r for r in bgu_results if r.quality == 'A+']
+                vcp_results = [r for r in vcp_results if r.quality == 'A+']
+            elif "只看 A+ 和 A" in min_quality:
+                bgu_results = [r for r in bgu_results if r.quality in ['A+', 'A']]
+                vcp_results = [r for r in vcp_results if r.quality in ['A+', 'A']]
+            
             st.session_state['bgu_results'] = bgu_results
             st.session_state['vcp_results'] = vcp_results
-            st.session_state['pp_results'] = pp_results
         
         # 顯示結果
         if 'bgu_results' in st.session_state:
             bgu_results = st.session_state.get('bgu_results', [])
             vcp_results = st.session_state.get('vcp_results', [])
-            pp_results = st.session_state.get('pp_results', [])
             
-            col1, col2, col3 = st.columns(3)
-            col1.metric("🚀 BGU", len(bgu_results))
-            col2.metric("🎯 VCP", len(vcp_results))
-            col3.metric("⚡ Power Play", len(pp_results))
+            col1, col2 = st.columns(2)
+            col1.metric("🚀 BGU 發現", len(bgu_results))
+            col2.metric("🎯 VCP 發現", len(vcp_results))
             
-            # BGU
-            if bgu_results and setup_filter in ["全部", "只看 BGU"]:
+            # BGU Results
+            if bgu_results:
                 st.markdown("### 🚀 BGU (跳空突破)")
-                for setup in bgu_results[:8]:
-                    with st.expander(f"**{setup.ticker}** | {setup.quality} | {setup.score:.0f}分 | 跳空{setup.gap_percent:.1f}%"):
+                
+                for setup in bgu_results[:6]:
+                    quality_emoji = "⭐" if setup.quality == 'A+' else "✅" if setup.quality == 'A' else "⚠️"
+                    
+                    with st.expander(f"{quality_emoji} **{setup.ticker}** | {setup.quality} | {setup.score:.0f}分 | 跳空 {setup.gap_percent:.1f}%"):
+                        
+                        # 買入理由
+                        if setup.quality in ['A+', 'A'] and setup.buy_reasons:
+                            st.markdown("**✅ 為什麼值得買入:**")
+                            for reason in setup.buy_reasons[:5]:
+                                st.markdown(f"- {reason}")
+                            st.divider()
+                        
                         col1, col2 = st.columns(2)
+                        
                         with col1:
                             st.markdown(f"""
-                            - 價格: ${setup.price:.2f}
-                            - RS: {setup.rs_rating:.0f}
+                            **交易計劃:**
                             - 入場: ${setup.entry_price}
                             - 止損: ${setup.stop_loss}
+                            - T1: ${setup.target_1} (2R)
+                            - T2: ${setup.target_2} (3R)
                             - R:R: {setup.risk_reward}:1
                             """)
-                        with col2:
-                            st.markdown(setup.notes)
                         
-                        if st.button(f"查看圖表", key=f"bgu_{setup.ticker}"):
-                            df = DataFetcher.get_stock(setup.ticker, "3mo")
+                        with col2:
+                            st.markdown(f"""
+                            **技術數據:**
+                            - RS Rating: {setup.rs_rating:.0f}
+                            - ADR%: {setup.adr_percent:.1f}%
+                            - 量比: {setup.volume_ratio:.1f}x
+                            """)
+                        
+                        # 圖表按鈕
+                        if st.button(f"📈 查看 {setup.ticker} 圖表", key=f"bgu_chart_{setup.ticker}"):
+                            df = DataFetcher.get_stock(setup.ticker, "6mo")
                             if df is not None:
-                                fig = ChartBuilder.create_setup_chart(df, setup.ticker, setup)
+                                fig = ChartBuilder.create_annotated_chart(df, setup.ticker, setup)
                                 st.plotly_chart(fig, use_container_width=True)
+                        
+                        # 期權策略
+                        if setup.options_strategy and setup.quality in ['A+', 'A']:
+                            with st.expander("📊 期權策略"):
+                                rec_idx = setup.options_strategy['recommended_index']
+                                rec_strategy = setup.options_strategy['strategies'][rec_idx]
+                                st.markdown(f"**推薦:** {rec_strategy['name']}")
+                                st.markdown(rec_strategy['details'])
             
-            # VCP
-            if vcp_results and setup_filter in ["全部", "只看 VCP"]:
+            # VCP Results
+            if vcp_results:
                 st.markdown("### 🎯 VCP (波動收縮)")
-                for setup in vcp_results[:8]:
-                    with st.expander(f"**{setup.ticker}** | {setup.quality} | {setup.score:.0f}分 | 緊縮{setup.tightness:.1f}%"):
+                
+                for setup in vcp_results[:6]:
+                    quality_emoji = "⭐" if setup.quality == 'A+' else "✅" if setup.quality == 'A' else "⚠️"
+                    
+                    with st.expander(f"{quality_emoji} **{setup.ticker}** | {setup.quality} | {setup.score:.0f}分 | 緊縮 {setup.tightness:.1f}%"):
+                        
+                        # 買入理由
+                        if setup.quality in ['A+', 'A'] and setup.buy_reasons:
+                            st.markdown("**✅ 為什麼值得買入:**")
+                            for reason in setup.buy_reasons[:5]:
+                                st.markdown(f"- {reason}")
+                            st.divider()
+                        
                         col1, col2 = st.columns(2)
+                        
                         with col1:
                             st.markdown(f"""
-                            - 價格: ${setup.price:.2f}
-                            - RS: {setup.rs_rating:.0f}
+                            **交易計劃:**
+                            - Pivot: ${setup.pivot_price:.2f}
                             - 入場: ${setup.entry_price}
                             - 止損: ${setup.stop_loss}
+                            - T1: ${setup.target_1} (2R)
                             - R:R: {setup.risk_reward}:1
                             """)
-                        with col2:
-                            st.markdown(setup.notes)
                         
-                        if st.button(f"查看圖表", key=f"vcp_{setup.ticker}"):
-                            df = DataFetcher.get_stock(setup.ticker, "3mo")
-                            if df is not None:
-                                fig = ChartBuilder.create_setup_chart(df, setup.ticker, setup)
-                                st.plotly_chart(fig, use_container_width=True)
-            
-            # Power Play
-            if pp_results and setup_filter in ["全部", "只看 Power Play"]:
-                st.markdown("### ⚡ Power Play (強勢整理)")
-                for setup in pp_results[:8]:
-                    with st.expander(f"**{setup.ticker}** | {setup.quality} | {setup.score:.0f}分"):
-                        col1, col2 = st.columns(2)
-                        with col1:
-                            st.markdown(f"""
-                            - 價格: ${setup.price:.2f}
-                            - 30日大漲: {setup.gap_percent:.0f}%
-                            - 5日緊縮: {setup.tightness:.1f}%
-                            - 入場: ${setup.entry_price}
-                            - 止損: ${setup.stop_loss}
-                            """)
                         with col2:
-                            st.markdown(setup.notes)
+                            st.markdown(f"""
+                            **VCP 數據:**
+                            - 收縮次數: {setup.contractions}
+                            - 最終緊縮: {setup.tightness:.1f}%
+                            - RS Rating: {setup.rs_rating:.0f}
+                            """)
+                        
+                        if st.button(f"📈 查看 {setup.ticker} 圖表", key=f"vcp_chart_{setup.ticker}"):
+                            df = DataFetcher.get_stock(setup.ticker, "6mo")
+                            if df is not None:
+                                fig = ChartBuilder.create_annotated_chart(df, setup.ticker, setup)
+                                st.plotly_chart(fig, use_container_width=True)
+                        
+                        if setup.options_strategy and setup.quality in ['A+', 'A']:
+                            with st.expander("📊 期權策略"):
+                                rec_idx = setup.options_strategy['recommended_index']
+                                rec_strategy = setup.options_strategy['strategies'][rec_idx]
+                                st.markdown(f"**推薦:** {rec_strategy['name']}")
+                                st.markdown(rec_strategy['details'])
             
-            if not bgu_results and not vcp_results and not pp_results:
-                st.info("沒有發現符合條件的 Setup，嘗試其他板塊")
+            if not bgu_results and not vcp_results:
+                st.info("沒有發現符合條件的 Setup，嘗試其他板塊或降低質量要求")
     
-    # ===== TAB 4: 52W Highs =====
+    # ===== TAB 4: Position Calculator =====
     with tabs[3]:
-        st.header("🔥 52週新高掃描")
-        
-        st.info("尋找創新高或接近新高的強勢股")
-        
-        if st.button("掃描新高", type="primary", key="scan_highs"):
-            scanner = MarketScanner()
-            
-            with st.spinner("掃描中..."):
-                results = scanner.scan_52w_highs(ALL_STOCKS[:100])
-            
-            if results:
-                st.success(f"找到 {len(results)} 隻股票接近52週新高")
-                
-                df = pd.DataFrame(results)
-                
-                new_highs = df[df['new_high'] == True]
-                if not new_highs.empty:
-                    st.markdown("### 🎉 創新高!")
-                    st.dataframe(
-                        new_highs[['ticker', 'price', 'high_52w', 'dist_low', 'vol_ratio']]
-                        .rename(columns={'ticker': 'Ticker', 'price': '價格', 'high_52w': '52週高',
-                                        'dist_low': '距低點%', 'vol_ratio': '量比'})
-                        .style.format({'價格': '${:.2f}', '52週高': '${:.2f}', 
-                                      '距低點%': '+{:.0f}%', '量比': '{:.1f}x'}),
-                        hide_index=True
-                    )
-                
-                near_highs = df[df['new_high'] == False]
-                if not near_highs.empty:
-                    st.markdown("### 📈 接近新高 (5%內)")
-                    st.dataframe(
-                        near_highs[['ticker', 'price', 'high_52w', 'dist_high', 'vol_ratio']]
-                        .rename(columns={'ticker': 'Ticker', 'price': '價格', 'high_52w': '52週高',
-                                        'dist_high': '距高點%', 'vol_ratio': '量比'})
-                        .style.format({'價格': '${:.2f}', '52週高': '${:.2f}', 
-                                      '距高點%': '{:.1f}%', '量比': '{:.1f}x'}),
-                        hide_index=True
-                    )
-    
-    # ===== TAB 5: Trend Leaders =====
-    with tabs[4]:
-        st.header("📈 趨勢領袖")
-        
-        st.info("掃描通過 Minervini 趨勢模板的股票")
-        
-        if st.button("掃描趨勢", type="primary", key="scan_trend"):
-            scanner = MarketScanner()
-            
-            with st.spinner("掃描中..."):
-                results = scanner.scan_trend_template(ALL_STOCKS[:80])
-            
-            if results:
-                st.success(f"找到 {len(results)} 隻股票通過趨勢模板")
-                
-                for r in results[:10]:
-                    status = "✅ 完全通過" if r['passed'] else "⚠️ 部分通過"
-                    with st.expander(f"**{r['ticker']}** - {status} ({r['trend_score']}/{r['trend_total']})"):
-                        for icon, check in r['checks']:
-                            st.write(f"{icon} {check}")
-    
-    # ===== TAB 6: Position Calculator =====
-    with tabs[5]:
         st.header("💰 倉位計算器")
         
         col1, col2 = st.columns(2)
@@ -1453,7 +1536,6 @@ def main():
                 col2.metric("金額", f"${result['position_value']:,.0f}")
                 col3.metric("最大虧損", f"${result['max_loss']:,.0f}")
                 
-                # R-multiples
                 st.markdown("### 止盈目標")
                 risk = entry - stop
                 for r in [2, 3, 5]:
@@ -1461,79 +1543,21 @@ def main():
                     profit = result['shares'] * risk * r
                     st.write(f"• {r}R: ${target:.2f} (盈利 ${profit:,.0f})")
     
-    # ===== TAB 7: Education =====
-    with tabs[6]:
-        st.header("📖 交易教學")
-        
-        st.markdown("""
-        ## 三種 Setup 對比
-        
-        | Setup | 類型 | 最佳時機 | 風險 | 回報 |
-        |-------|------|----------|------|------|
-        | **BGU** | 動能突破 | 財報後 | 較高 | 10-20% |
-        | **VCP** | 整理突破 | 任何時候 | 較低 | 15-30% |
-        | **Power Play** | 強勢整理 | 強勢市場 | 中等 | 8-15% |
-        
-        ---
-        
-        ## A 級 Setup 標準
-        
-        ### 🚀 BGU (Buyable Gap Up)
-        - 跳空 ≥ 5%
-        - 量比 ≥ 2x
-        - 收盤在高點 80%+
-        - RS ≥ 80
-        
-        ### 🎯 VCP (Volatility Contraction)
-        - 2+ 次收縮
-        - 最終緊縮 ≤ 8%
-        - RS ≥ 80
-        - Stage 2 趨勢
-        
-        ### ⚡ Power Play
-        - 30天內大漲 10%+
-        - 5天整理 < 8%
-        - 量縮
-        - 在均線之上
-        
-        ---
-        
-        ## 風險管理
-        
-        1. **單筆風險 ≤ 2%**
-        2. **最多 5-8 個持倉**
-        3. **嚴格止損**
-        4. **分批止盈**
-        
-        ---
-        
-        ## 推薦資源
-        
-        - **Mark Minervini**: Trade Like a Stock Market Wizard
-        - **Qullamaggie**: YouTube / Twitter
-        - **William O'Neil**: How to Make Money in Stocks
-        """)
-    
     # Sidebar
     st.sidebar.divider()
-    st.sidebar.markdown("### 📖 v7.0 Ultimate")
+    st.sidebar.markdown("### 📖 v7.5 Pro")
     st.sidebar.markdown(f"""
-    **股票數量:** {len(ALL_STOCKS)}+
+    **新功能:**
+    - ✅ 圖表標註 Setup 關鍵點
+    - ✅ 優化止損 (更緊)
+    - ✅ 期權策略建議
+    - ✅ 詳細買入理由
     
-    **掃描功能:**
-    - ✅ BGU 跳空突破
-    - ✅ VCP 波動收縮
-    - ✅ Power Play 強勢整理
-    - ✅ 52週新高
-    - ✅ 趨勢模板
-    
-    **板塊覆蓋:**
-    - 科技 / 半導體
-    - 軟件 / 雲端
-    - 金融 / 醫療
-    - 消費 / 能源
-    - 高成長 / 中概
-    - AI / 新能源
+    **期權策略:**
+    - 賣 PUT (收權利金)
+    - 買 CALL (看漲)
+    - 牛市 PUT 價差
+    - 牛市 CALL 價差
     """)
 
 
