@@ -1,13 +1,13 @@
 # -*- coding: utf-8 -*-
 """
-🎯 Market Structure Radar - v9.0 Ultimate Qullamaggie Edition
-=============================================================
+🎯 Market Structure Radar - v9.5 Ultimate Edition
+=================================================
 
-重大改進:
-✅ 保留所有 v8.5 功能 (批量下載、Short Put、VCP、PCR、支撐位分析)
-✅ 新增: Qullamaggie 動能突破選股器 (EMA多頭排列, ADR 高波動, 高動能)
-✅ 新增: 機構級回測系統 (修復滑點、初始止損、量能確認、itertuples 提速 10x)
-✅ 新增: Qullamaggie 專屬圖表與期望值 (Expectancy) UI
+核心亮點:
+1. 🦊 Qullamaggie 機構級回測 (修復執行價滑點、嚴格初始止損、批量期望值掃描)
+2. 💰 Short Put 恐慌支撐反彈邏輯 (MACD動能剎車、精準支撐位、拒絕死魚股)
+3. 🎯 VCP 波動收縮形態 (Swing Points, 量能特徵分析)
+4. 🚀 批量異步下載引擎 (大幅提升掃描速度)
 
 Author: Pro Trader AI
 """
@@ -19,7 +19,7 @@ import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
 import warnings
@@ -30,7 +30,7 @@ warnings.filterwarnings('ignore')
 # ============================================
 @dataclass
 class Config:
-    PAGE_TITLE: str = "Market Radar v9.0 Qullamaggie"
+    PAGE_TITLE: str = "Market Radar v9.5 Ultimate"
     PAGE_ICON: str = "🎯"
     CACHE_TTL: int = 1800
 
@@ -66,12 +66,6 @@ STOCK_UNIVERSE = {
 
 ALL_STOCKS = list(set([s for stocks in STOCK_UNIVERSE.values() for s in stocks]))
 ALL_STOCKS.sort()
-
-SECTORS = {
-    'SMH (半導體)': {'etf': 'SMH', 'holdings': STOCK_UNIVERSE['Semiconductors'][:12]},
-    'XLK (科技)': {'etf': 'XLK', 'holdings': STOCK_UNIVERSE['Software & Cloud'][:12]},
-    'ARKK (成長)': {'etf': 'ARKK', 'holdings': STOCK_UNIVERSE['High Growth'][:12]},
-}
 
 # ============================================
 # 📡 BATCH DATA FETCHER 
@@ -109,7 +103,6 @@ class BatchDataFetcher:
 # 🧮 TECHNICAL ANALYSIS
 # ============================================
 class TechnicalAnalysis:
-    
     @staticmethod
     def ema(prices: pd.Series, period: int) -> pd.Series:
         return prices.ewm(span=period, adjust=False).mean()
@@ -141,6 +134,21 @@ class TechnicalAnalysis:
         sma = prices.rolling(period).mean()
         std = prices.rolling(period).std()
         return ((sma + std * 2) - (sma - std * 2)) / sma
+        
+    @staticmethod
+    def bollinger_bands(prices: pd.Series, period: int = 20) -> Tuple[pd.Series, pd.Series]:
+        sma = prices.rolling(period).mean()
+        std = prices.rolling(period).std()
+        return sma + std * 2, sma - std * 2
+        
+    @staticmethod
+    def macd(prices: pd.Series, fast=12, slow=26, signal=9) -> pd.DataFrame:
+        exp1 = prices.ewm(span=fast, adjust=False).mean()
+        exp2 = prices.ewm(span=slow, adjust=False).mean()
+        macd_line = exp1 - exp2
+        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
+        hist = macd_line - signal_line
+        return pd.DataFrame({'macd': macd_line, 'signal': signal_line, 'hist': hist})
     
     @staticmethod
     def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
@@ -176,16 +184,26 @@ class TechnicalAnalysis:
     
     @staticmethod
     def calculate_support_levels(df: pd.DataFrame) -> Dict:
-        if len(df) < 50: return {}
+        if len(df) < 100: return {}
         close = float(df['Close'].iloc[-1])
-        sma50, sma200 = float(df['Close'].rolling(50).mean().iloc[-1]), float(df['Close'].rolling(200).mean().iloc[-1]) if len(df) >= 200 else 0
-        low_20d = float(df['Low'].tail(20).min())
-        supports = [('SMA50', sma50), ('SMA200', sma200), ('20日低點', low_20d)]
+        sma50 = float(df['Close'].rolling(50).mean().iloc[-1])
+        sma100 = float(df['Close'].rolling(100).mean().iloc[-1])
+        sma200 = float(df['Close'].rolling(200).mean().iloc[-1]) if len(df) >= 200 else sma50
+        _, lower_bb = TechnicalAnalysis.bollinger_bands(df['Close'])
+        lower_bb_val = float(lower_bb.iloc[-1])
+        
+        supports = [('SMA50', sma50), ('SMA100', sma100), ('SMA200', sma200), ('布林下軌', lower_bb_val)]
         valid = [(name, price) for name, price in supports if price < close]
+        
         if valid:
             nearest = max(valid, key=lambda x: x[1])
-            return {'sma50': sma50, 'sma200': sma200, 'low_20d': low_20d, 'nearest_support': nearest[0], 'nearest_support_price': nearest[1], 'distance_pct': round((close - nearest[1]) / close * 100, 2)}
-        return {'sma50': sma50, 'sma200': sma200, 'low_20d': low_20d, 'nearest_support': None, 'distance_pct': None}
+            return {
+                'nearest_support': nearest[0], 
+                'nearest_support_price': nearest[1], 
+                'distance_pct': round((close - nearest[1]) / close * 100, 2),
+                'sma200_val': sma200
+            }
+        return {'nearest_support': '無 (跌破所有支撐)', 'distance_pct': 99.9, 'sma200_val': sma200}
     
     @staticmethod
     def find_swing_points(df: pd.DataFrame, lookback: int = 60, window: int = 5) -> Dict:
@@ -222,7 +240,7 @@ class TechnicalAnalysis:
         except: return 50
 
 # ============================================
-# 📊 期權與情緒分析器 
+# 📊 OPTIONS & SENTIMENT
 # ============================================
 class RealIVCalculator:
     @staticmethod
@@ -254,131 +272,255 @@ class PCRCalculator:
         except Exception as e: return {'pcr': None, 'status': f'Error: {str(e)}'}
 
 # ============================================
-# 💰 SHORT PUT SCREENER
+# 🦊 QULLAMAGGIE SCREENER & BACKTESTER
+# ============================================
+@dataclass
+class QullamaggieCandidate:
+    ticker: str
+    price: float
+    adr: float
+    momentum_3m: float
+    momentum_1m: float
+    above_ma_stack: bool 
+    consolidation_tightness: float 
+    vol_dry_up: bool
+    score: float
+    notes: List[str]
+    pivot_price: float
+    stop_loss: float
+
+class QullamaggieStrategy:
+    def __init__(self):
+        self.ta = TechnicalAnalysis()
+
+    def screen(self, df: pd.DataFrame, ticker: str) -> Optional[QullamaggieCandidate]:
+        if df is None or len(df) < 100: return None
+        try:
+            close = df['Close']
+            curr_price = float(close.iloc[-1])
+            
+            ema10 = float(self.ta.ema(close, 10).iloc[-1])
+            ema20 = float(self.ta.ema(close, 20).iloc[-1])
+            sma50 = float(close.rolling(50).mean().iloc[-1])
+            ma_stacked = (curr_price > ema10) and (ema10 > ema20) and (ema20 > sma50)
+            
+            ret_1m = (curr_price / float(close.iloc[-21]) - 1) * 100
+            ret_3m = (curr_price / float(close.iloc[-63]) - 1) * 100
+            
+            adr_series = self.ta.adr_percent(df, 20)
+            adr = float(adr_series.iloc[-1]) if not pd.isna(adr_series.iloc[-1]) else 0
+            
+            recent_20 = df.tail(20)
+            pivot_price = float(recent_20['High'].max())
+            
+            high_10 = float(df['High'].tail(10).max())
+            low_10 = float(df['Low'].tail(10).min())
+            tightness = (high_10 / low_10 - 1) * 100
+            
+            suggested_stop = max(low_10, pivot_price * 0.95)
+            
+            vol_50_avg = float(df['Volume'].tail(50).mean())
+            vol_last_3_avg = float(df['Volume'].tail(3).mean())
+            vol_dry_up = vol_last_3_avg < vol_50_avg * 0.7
+            
+            score, notes = 0, []
+            if ma_stacked: score += 30; notes.append("✅ 完美均線排列 (P > EMA10 > EMA20 > SMA50)")
+            else: score -= 20; notes.append("❌ 均線未呈現強多頭排列")
+                
+            if adr >= 4.0: score += 20; notes.append(f"✅ ADR {adr:.1f}% (> 4% 高波動妖股特質)")
+            elif adr >= 3.0: score += 10; notes.append(f"⚠️ ADR {adr:.1f}% (波動中等)")
+            else: notes.append(f"❌ ADR {adr:.1f}% (波動太小)")
+                
+            if ret_3m >= 30 or ret_1m >= 20: score += 20; notes.append(f"✅ 動能強勁 (1M: {ret_1m:.1f}%, 3M: {ret_3m:.1f}%)")
+            else: notes.append(f"❌ 動能不足")
+                
+            if tightness < 10.0: score += 20; notes.append(f"✅ 過去10天收縮極致 (緊縮度 {tightness:.1f}%)")
+            elif tightness < 15.0: score += 10; notes.append(f"⚠️ 區間盤整中 (緊縮度 {tightness:.1f}%)")
+                
+            if vol_dry_up: score += 10; notes.append("✅ 突破前量縮 (Dry Up)")
+
+            if score >= 40:
+                return QullamaggieCandidate(
+                    ticker=ticker, price=curr_price, adr=adr, momentum_3m=ret_3m, momentum_1m=ret_1m,
+                    above_ma_stack=ma_stacked, consolidation_tightness=tightness, vol_dry_up=vol_dry_up,
+                    score=score, notes=notes, pivot_price=pivot_price, stop_loss=suggested_stop
+                )
+            return None
+        except: return None
+
+    def backtest_1yr(self, df: pd.DataFrame) -> Dict:
+        """機構級回測引擎 (修復滑點、增加初始止損、量能確認)"""
+        if len(df) < 252 + 50: return {'trades': 0}
+        
+        test_df = df.copy()
+        test_df['EMA10'] = self.ta.ema(test_df['Close'], 10)
+        test_df['EMA20'] = self.ta.ema(test_df['Close'], 20)
+        test_df['SMA50'] = test_df['Close'].rolling(50).mean()
+        test_df['ADR'] = self.ta.adr_percent(test_df, 20)
+        test_df['High_20'] = test_df['High'].shift(1).rolling(20).max()
+        test_df['AvgVol_50'] = test_df['Volume'].shift(1).rolling(50).mean()
+        
+        test_df = test_df.tail(252).copy()
+        
+        in_position = False
+        entry_price = 0
+        initial_stop = 0
+        entry_date = None
+        trades = []
+        buy_signals = []
+        sell_signals = []
+        
+        for row in test_df.itertuples():
+            date = row.Index
+            
+            if not in_position:
+                vol_surge = False
+                if not pd.isna(row.AvgVol_50) and row.AvgVol_50 > 0:
+                    vol_surge = row.Volume > (row.AvgVol_50 * 1.5)
+                
+                if (row.High > row.High_20 and 
+                    row.EMA10 > row.EMA20 > row.SMA50 and 
+                    row.ADR > 3.0 and 
+                    vol_surge):
+                    
+                    in_position = True
+                    entry_price = max(row.High_20, row.Open) 
+                    initial_stop = max(row.Low, entry_price * 0.95) 
+                    entry_date = date
+                    buy_signals.append((date, entry_price))
+            else:
+                current_stop = max(initial_stop, row.EMA20)
+                if row.Low < current_stop:
+                    in_position = False
+                    exit_price = min(current_stop, row.Open) 
+                    pnl_pct = (exit_price / entry_price - 1) * 100
+                    trades.append({
+                        'entry_date': entry_date, 'entry_price': entry_price,
+                        'exit_date': date, 'exit_price': exit_price, 'pnl_pct': pnl_pct
+                    })
+                    sell_signals.append((date, exit_price))
+                    
+        if in_position:
+            pnl_pct = (test_df['Close'].iloc[-1] / entry_price - 1) * 100
+            trades.append({
+                'entry_date': entry_date, 'entry_price': entry_price,
+                'exit_date': test_df.index[-1], 'exit_price': test_df['Close'].iloc[-1], 'pnl_pct': pnl_pct, 'open': True
+            })
+
+        wins = [t for t in trades if t['pnl_pct'] > 0]
+        losses = [t for t in trades if t['pnl_pct'] <= 0]
+        
+        win_rate = (len(wins) / len(trades) * 100) if trades else 0
+        avg_win = np.mean([t['pnl_pct'] for t in wins]) if wins else 0
+        avg_loss = np.mean([t['pnl_pct'] for t in losses]) if losses else 0
+        expectancy = (win_rate/100 * avg_win) + ((1 - win_rate/100) * avg_loss) if trades else 0
+        total_pnl = sum([t['pnl_pct'] for t in trades]) if trades else 0
+        
+        return {
+            'trades': len(trades), 'win_rate': win_rate, 'avg_win': avg_win, 'avg_loss': avg_loss,
+            'expectancy': expectancy, 'total_pnl': total_pnl, 'history': trades, 
+            'buy_marks': buy_signals, 'sell_marks': sell_signals, 'test_df': test_df
+        }
+
+# ============================================
+# 💰 SHORT PUT SCREENER (恐慌支撐反彈)
 # ============================================
 @dataclass
 class ShortPutCandidate:
     ticker: str
     price: float
-    adx: float
     above_sma200: bool
+    pullback_depth: float
     rsi: float
-    beta: float
+    macd_reversal: bool
     hv_rank: float
     real_iv: Optional[float]
-    iv_vs_hv: str
     nearest_support: str
     nearest_support_price: float
     distance_to_support: float
-    pcr_oi: float
-    pcr_sentiment: str
     score: float
     quality: str
     suggested_strike: float
-    annual_return_est: float
     notes: List[str]
-    tradingview_url: str
-    yahoo_url: str
 
 class ShortPutScreener:
     def __init__(self):
         self.ta = TechnicalAnalysis()
-        self.pcr_calc = PCRCalculator()
         self.iv_calc = RealIVCalculator()
     
-    def screen(self, df: pd.DataFrame, ticker: str, spy_df: pd.DataFrame = None, fetch_real_iv: bool = False) -> Optional[ShortPutCandidate]:
+    def screen(self, df: pd.DataFrame, ticker: str, fetch_real_iv: bool = False) -> Optional[ShortPutCandidate]:
         if df is None or len(df) < 200: return None
         try:
             close = df['Close']
             curr_price = float(close.iloc[-1])
-            adx_series = self.ta.adx(df)
-            adx = float(adx_series.iloc[-1]) if not pd.isna(adx_series.iloc[-1]) else 30
-            sma200 = float(close.rolling(200).mean().iloc[-1])
-            above_sma200 = curr_price > sma200
-            rsi = float(self.ta.rsi(close).iloc[-1]) if not pd.isna(self.ta.rsi(close).iloc[-1]) else 50
-            beta = self.ta.calculate_beta(df, spy_df) if spy_df is not None else 1.0
-            hv_rank = self.ta.estimate_hv_rank(df)
-            support_data = self.ta.calculate_support_levels(df)
             
-            real_iv, iv_vs_hv = None, "基於 HV 估算"
+            support_data = self.ta.calculate_support_levels(df)
+            sma200 = support_data.get('sma200_val', 0)
+            above_sma200 = curr_price > sma200
+            if not above_sma200: return None 
+
+            high_60d = float(df['High'].tail(60).max())
+            pullback_depth = (curr_price / high_60d - 1) * 100
+            rsi = float(self.ta.rsi(close).iloc[-1])
+            
+            macd_df = self.ta.macd(close)
+            hist_today, hist_ytd = macd_df['hist'].iloc[-1], macd_df['hist'].iloc[-2]
+            macd_reversal = (hist_today > hist_ytd) and (hist_today < 0) 
+            
+            hv_rank = self.ta.estimate_hv_rank(df)
+            real_iv = None
             if fetch_real_iv:
                 iv_data = self.iv_calc.get_real_iv(ticker)
-                if iv_data.get('iv'):
-                    real_iv = iv_data['iv']
-                    iv_vs_hv = f"✅ IV {real_iv:.0f}% > HV (肥期權)" if real_iv > hv_rank * 0.8 else f"⚠️ IV {real_iv:.0f}% ≈ HV"
-            
-            pcr_data = self.pcr_calc.get_pcr(ticker)
-            pcr_oi = pcr_data.get('pcr_oi', 1.0) if pcr_data.get('status') == 'OK' else 1.0
-            pcr_sentiment = pcr_data.get('sentiment', '😐 N/A') if pcr_data.get('status') == 'OK' else '😐 N/A'
-            
+                if iv_data.get('iv'): real_iv = iv_data['iv']
+
+            dist_to_support = support_data.get('distance_pct', 99)
+            support_name = support_data.get('nearest_support', 'N/A')
+            support_price = support_data.get('nearest_support_price', 0)
+
             score, notes = 0, []
             
-            if adx < 20: score += 25; notes.append(f"✅ ADX {adx:.1f} - 無趨勢 (完美)")
-            elif adx < 25: score += 20; notes.append(f"✅ ADX {adx:.1f} - 弱趨勢")
-            elif adx < 30: score += 10; notes.append(f"⚠️ ADX {adx:.1f} - 有趨勢")
-            else: score -= 10; notes.append(f"❌ ADX {adx:.1f} - 強趨勢")
+            if dist_to_support <= 2.0: score += 30; notes.append(f"🎯 完美踩中支撐 ({support_name})，距離僅 {dist_to_support:.1f}%")
+            elif dist_to_support <= 4.0: score += 20; notes.append(f"✅ 接近支撐區 ({support_name})，距離 {dist_to_support:.1f}%")
+            else: score -= 10; notes.append(f"❌ 懸在半空，距離支撐 {dist_to_support:.1f}% (風險高)")
+
+            if -15 <= pullback_depth <= -5: score += 20; notes.append(f"✅ 健康回調區間 ({pullback_depth:.1f}%)，散戶恐慌、IV上升")
+            elif pullback_depth > -5: score += 5; notes.append(f"⚠️ 離高點太近 ({pullback_depth:.1f}%)，期權肉不多")
+            else: score -= 10; notes.append(f"❌ 跌幅過深 ({pullback_depth:.1f}%)，趨勢可能已破壞")
+
+            if 30 <= rsi <= 45: score += 20; notes.append(f"✅ RSI {rsi:.0f} - 進入超賣區，Premium 最肥")
+            elif rsi < 30: score += 10; notes.append(f"⚠️ RSI {rsi:.0f} - 極度超賣 (注意防範無底洞)")
+            elif 45 < rsi <= 60: score += 10; notes.append(f"😐 RSI {rsi:.0f} - 情緒中性，適合保守收租")
+            else: score -= 10; notes.append(f"❌ RSI {rsi:.0f} - 動能偏上，隨時可能見頂回調")
+
+            if macd_reversal: score += 20; notes.append("✅ MACD 綠柱縮短 - 下跌動能衰竭，適合進場賣 Put")
+            else: score -= 10; notes.append("⚠️ 下跌動能仍在釋放中，可能接飛刀")
+                
+            if (real_iv and real_iv > 40) or (not real_iv and hv_rank > 40):
+                score += 10; notes.append("✅ 隱含波動率足夠，權利金豐厚")
+
+            quality = 'A+' if score >= 80 else 'A' if score >= 60 else 'B' if score >= 40 else 'C'
+            suggested_strike = round(support_price * 0.98, 2) if support_price > 0 else round(curr_price * 0.9, 2)
             
-            if above_sma200: score += 20; notes.append(f"✅ 在 SMA200 上方 {(curr_price / sma200 - 1) * 100:.1f}%")
-            else: score -= 15; notes.append("❌ 在 SMA200 下方")
-            
-            if 40 <= rsi <= 60: score += 20; notes.append(f"✅ RSI {rsi:.0f} - 完美中性")
-            elif 35 <= rsi <= 65: score += 15; notes.append(f"✅ RSI {rsi:.0f} - 可接受")
-            elif rsi < 35: score += 12; notes.append(f"⚠️ RSI {rsi:.0f} - 超賣 (好時機)")
-            else: score += 5; notes.append(f"⚠️ RSI {rsi:.0f} - 超買")
-            
-            if beta < 0.8: score += 15; notes.append(f"✅ Beta {beta:.2f} - 非常穩定")
-            elif beta < 1.0: score += 12; notes.append(f"✅ Beta {beta:.2f} - 穩定")
-            else: score += 5; notes.append(f"⚠️ Beta {beta:.2f} - 波動較大")
-            
-            if real_iv:
-                if real_iv > 30: score += 20; notes.append(f"✅ 真實 IV {real_iv:.0f}% - 權利金豐厚")
-                else: score += 10; notes.append(f"⚠️ 真實 IV {real_iv:.0f}%")
-            else:
-                if hv_rank >= 50: score += 15; notes.append(f"✅ HV Rank {hv_rank:.0f}% (估算)")
-                elif hv_rank >= 30: score += 10; notes.append(f"⚠️ HV Rank {hv_rank:.0f}% (估算)")
-                else: score += 5; notes.append(f"❌ HV Rank {hv_rank:.0f}% (偏低)")
-            
-            if support_data.get('distance_pct'):
-                dist = support_data['distance_pct']
-                if dist < 3: score += 10; notes.append(f"✅ 距支撐僅 {dist:.1f}% ({support_data['nearest_support']}) - 安全邊際高")
-                elif dist < 5: score += 7; notes.append(f"✅ 距支撐 {dist:.1f}% ({support_data['nearest_support']})")
-                else: score += 3; notes.append(f"⚠️ 距支撐 {dist:.1f}%")
-            
-            if not above_sma200: score = min(score, 40)
-            
-            quality = 'A+' if score >= 80 else 'A' if score >= 65 else 'B' if score >= 50 else 'C'
-            suggested_strike = round(support_data.get('nearest_support_price', curr_price * 0.9), 2)
-            if suggested_strike >= curr_price: suggested_strike = round(curr_price * 0.90, 2)
-            annual_return = max(10, hv_rank * 0.4)
-            
-            return ShortPutCandidate(
-                ticker=ticker, price=curr_price, adx=adx, above_sma200=above_sma200, rsi=rsi, beta=beta,
-                hv_rank=hv_rank, real_iv=real_iv, iv_vs_hv=iv_vs_hv, nearest_support=support_data.get('nearest_support', 'N/A'),
-                nearest_support_price=support_data.get('nearest_support_price', curr_price * 0.9),
-                distance_to_support=support_data.get('distance_pct', 10), pcr_oi=pcr_oi, pcr_sentiment=pcr_sentiment,
-                score=score, quality=quality, suggested_strike=suggested_strike, annual_return_est=annual_return,
-                notes=notes, tradingview_url=f"https://www.tradingview.com/chart/?symbol={ticker}",
-                yahoo_url=f"https://finance.yahoo.com/quote/{ticker}"
-            )
+            if score >= 40: 
+                return ShortPutCandidate(
+                    ticker=ticker, price=curr_price, above_sma200=True, pullback_depth=pullback_depth,
+                    rsi=rsi, macd_reversal=macd_reversal, hv_rank=hv_rank, real_iv=real_iv,
+                    nearest_support=support_name, nearest_support_price=support_price, distance_to_support=dist_to_support,
+                    score=score, quality=quality, suggested_strike=suggested_strike, notes=notes
+                )
+            return None
         except: return None
     
-    def scan_batch(self, stocks: List[str], spy_df: pd.DataFrame, progress_callback=None) -> List[ShortPutCandidate]:
+    def scan_batch(self, stocks: List[str], progress_callback=None) -> List[ShortPutCandidate]:
         results = []
         all_data = BatchDataFetcher.batch_download(stocks, period='1y')
         for i, ticker in enumerate(stocks):
             if progress_callback: progress_callback(i, len(stocks), ticker)
             df = all_data.get(ticker)
-            if df is not None and len(df) >= 200:
-                candidate = self.screen(df, ticker, spy_df, fetch_real_iv=False)
-                if candidate and candidate.score >= 40 and candidate.above_sma200: results.append(candidate)
-        results.sort(key=lambda x: x.score, reverse=True)
-        
-        for i, candidate in enumerate(results[:10]):
-            if progress_callback: progress_callback(len(stocks) + i, len(stocks) + 10, f"獲取 {candidate.ticker} 真實 IV")
-            df = all_data.get(candidate.ticker)
             if df is not None:
-                updated = self.screen(df, candidate.ticker, spy_df, fetch_real_iv=True)
-                if updated: results[i] = updated
+                cand = self.screen(df, ticker, fetch_real_iv=False)
+                if cand: results.append(cand)
+        results.sort(key=lambda x: x.score, reverse=True)
         return results
 
 # ============================================
@@ -398,24 +540,16 @@ class VCPCandidate:
     dry_up: bool
     rsi: float
     rs_rating: float
-    pcr_oi: float
-    pcr_sentiment: str
     pivot_price: float
     score: float
     quality: str
     entry_price: float
     stop_loss: float
-    target_1: float
-    target_2: float
-    risk_reward: float
     notes: List[str]
-    tradingview_url: str
-    yahoo_url: str
 
 class VCPScreener:
     def __init__(self):
         self.ta = TechnicalAnalysis()
-        self.pcr_calc = PCRCalculator()
     
     def screen(self, df: pd.DataFrame, ticker: str, spy_df: pd.DataFrame = None) -> Optional[VCPCandidate]:
         if df is None or len(df) < 100: return None
@@ -447,12 +581,7 @@ class VCPScreener:
             recent = df.tail(40)
             pivot = float(recent['High'].max())
             
-            pcr_data = self.pcr_calc.get_pcr(ticker)
-            pcr_oi = pcr_data.get('pcr_oi', 1.0) if pcr_data.get('status') == 'OK' else 1.0
-            pcr_sentiment = pcr_data.get('sentiment', '😐 N/A') if pcr_data.get('status') == 'OK' else '😐 N/A'
-            
             score, notes = 0, []
-            
             if above_sma50 and above_sma200: score += 25; notes.append("✅ 在 SMA50 和 SMA200 之上")
             elif above_sma50: score += 15; notes.append("⚠️ 在 SMA50 之上")
             
@@ -460,41 +589,29 @@ class VCPScreener:
             elif bb_width < 0.15: score += 20; notes.append(f"✅ BB Width {bb_width:.3f} - 收窄")
             elif bb_width < 0.20: score += 10; notes.append(f"⚠️ BB Width {bb_width:.3f}")
             
-            if len(swing_contractions) >= 3 and swing_contractions[-1] < 8: score += 15; notes.append(f"✅ {len(swing_contractions)} 波遞減收縮，最後 {swing_contractions[-1]:.1f}%")
+            if len(swing_contractions) >= 3 and swing_contractions[-1] < 8: score += 15; notes.append(f"✅ {len(swing_contractions)} 波遞減收縮")
             elif len(swing_contractions) >= 2: score += 10; notes.append(f"⚠️ {len(swing_contractions)} 波收縮")
             
             if dist_from_high >= -5: score += 15; notes.append(f"✅ 距52週高點 {dist_from_high:.1f}%")
             elif dist_from_high >= -15: score += 10; notes.append(f"⚠️ 距52週高點 {dist_from_high:.1f}%")
             
             if 45 <= rsi <= 65: score += 10; notes.append(f"✅ RSI {rsi:.0f} - 橫盤區間")
-            elif 40 <= rsi <= 70: score += 5
             
             if vol_sig['is_healthy']: score += 10; notes.append(f"✅ 上漲放量/下跌縮量 (比率 {vol_sig['ratio']:.2f})")
-            if vol_sig['dry_up']: score += 10; notes.append(f"✅ 量能萎縮 Dry Up ({vol_sig['dry_up_ratio']:.2f}x)")
-            
+            if vol_sig['dry_up']: score += 10; notes.append(f"✅ 量能萎縮 Dry Up")
             if rs_rating >= 80: score += 10; notes.append(f"✅ RS {rs_rating:.0f}")
-            elif rs_rating >= 70: score += 5
             
             quality = 'A+' if score >= 80 else 'A' if score >= 65 else 'B' if score >= 50 else 'C'
-            
             atr = float(self.ta.atr(df).iloc[-1])
             entry = pivot * 1.001
             stop = max(float(recent['Low'].min()), pivot * 0.95) - atr * 0.2
-            max_stop = entry * 0.06
-            if entry - stop > max_stop: stop = entry - max_stop
-            risk = entry - stop
-            target_1, target_2 = entry + risk * 2, entry + risk * 3
-            rr = (target_1 - entry) / risk if risk > 0 else 0
             
             return VCPCandidate(
                 ticker=ticker, price=curr_price, above_sma50=above_sma50, above_sma200=above_sma200,
                 dist_from_52w_high=dist_from_high, bb_width=bb_width, swing_contractions=swing_contractions,
                 contraction_quality=contraction_quality, volume_signature=vol_sig, dry_up=vol_sig['dry_up'],
-                rsi=rsi, rs_rating=rs_rating, pcr_oi=pcr_oi, pcr_sentiment=pcr_sentiment, pivot_price=pivot,
-                score=score, quality=quality, entry_price=round(entry, 2), stop_loss=round(stop, 2),
-                target_1=round(target_1, 2), target_2=round(target_2, 2), risk_reward=round(rr, 2), notes=notes,
-                tradingview_url=f"https://www.tradingview.com/chart/?symbol={ticker}",
-                yahoo_url=f"https://finance.yahoo.com/quote/{ticker}"
+                rsi=rsi, rs_rating=rs_rating, pivot_price=pivot, score=score, quality=quality, 
+                entry_price=round(entry, 2), stop_loss=round(stop, 2), notes=notes
             )
         except: return None
     
@@ -509,162 +626,6 @@ class VCPScreener:
                 if candidate and candidate.score >= 40 and candidate.above_sma50: results.append(candidate)
         results.sort(key=lambda x: x.score, reverse=True)
         return results
-
-# ============================================
-# 🦊 QULLAMAGGIE SCREENER & BACKTESTER (機構級優化)
-# ============================================
-@dataclass
-class QullamaggieCandidate:
-    ticker: str
-    price: float
-    adr: float
-    momentum_3m: float
-    momentum_1m: float
-    above_ma_stack: bool 
-    consolidation_tightness: float 
-    vol_dry_up: bool
-    score: float
-    notes: List[str]
-
-class QullamaggieStrategy:
-    """Kristjan Kullamägi 動能突破策略核心邏輯"""
-    def __init__(self):
-        self.ta = TechnicalAnalysis()
-
-    def screen(self, df: pd.DataFrame, ticker: str) -> Optional[QullamaggieCandidate]:
-        if df is None or len(df) < 100: return None
-        try:
-            close = df['Close']
-            curr_price = float(close.iloc[-1])
-            
-            ema10 = float(self.ta.ema(close, 10).iloc[-1])
-            ema20 = float(self.ta.ema(close, 20).iloc[-1])
-            sma50 = float(close.rolling(50).mean().iloc[-1])
-            ma_stacked = (curr_price > ema10) and (ema10 > ema20) and (ema20 > sma50)
-            
-            ret_1m = (curr_price / float(close.iloc[-21]) - 1) * 100
-            ret_3m = (curr_price / float(close.iloc[-63]) - 1) * 100
-            
-            adr_series = self.ta.adr_percent(df, 20)
-            adr = float(adr_series.iloc[-1]) if not pd.isna(adr_series.iloc[-1]) else 0
-            
-            high_10 = float(df['High'].tail(10).max())
-            low_10 = float(df['Low'].tail(10).min())
-            tightness = (high_10 / low_10 - 1) * 100
-            
-            vol_50_avg = float(df['Volume'].tail(50).mean())
-            vol_last_3_avg = float(df['Volume'].tail(3).mean())
-            vol_dry_up = vol_last_3_avg < vol_50_avg * 0.7
-            
-            score, notes = 0, []
-            if ma_stacked: score += 30; notes.append("✅ 完美均線排列 (P > EMA10 > EMA20 > SMA50)")
-            else: score -= 20; notes.append("❌ 均線未呈現強多頭排列")
-                
-            if adr >= 4.0: score += 20; notes.append(f"✅ ADR {adr:.1f}% (> 4% 高波動妖股特質)")
-            elif adr >= 3.0: score += 10; notes.append(f"⚠️ ADR {adr:.1f}% (波動中等)")
-            else: notes.append(f"❌ ADR {adr:.1f}% (波動太小)")
-                
-            if ret_3m >= 30 or ret_1m >= 20: score += 20; notes.append(f"✅ 動能強勁 (1M: {ret_1m:.1f}%, 3M: {ret_3m:.1f}%)")
-            else: notes.append(f"❌ 動能不足")
-                
-            if tightness < 10.0: score += 20; notes.append(f"✅ 過去10天收縮極致 (緊縮度 {tightness:.1f}%)")
-            elif tightness < 15.0: score += 10; notes.append(f"⚠️ 區間盤整中 (緊縮度 {tightness:.1f}%)")
-                
-            if vol_dry_up: score += 10; notes.append("✅ 突破前量縮 (Dry Up)")
-
-            if score >= 40:
-                return QullamaggieCandidate(
-                    ticker=ticker, price=curr_price, adr=adr, momentum_3m=ret_3m, momentum_1m=ret_1m,
-                    above_ma_stack=ma_stacked, consolidation_tightness=tightness, vol_dry_up=vol_dry_up,
-                    score=score, notes=notes
-                )
-            return None
-        except: return None
-
-    def backtest_1yr(self, df: pd.DataFrame) -> Dict:
-        """
-        改進版機構級回測引擎 (修復滑點、增加初始止損、量能確認、提速 10x)
-        """
-        if len(df) < 252 + 50: return {'trades': 0}
-        
-        test_df = df.copy()
-        test_df['EMA10'] = self.ta.ema(test_df['Close'], 10)
-        test_df['EMA20'] = self.ta.ema(test_df['Close'], 20)
-        test_df['SMA50'] = test_df['Close'].rolling(50).mean()
-        test_df['ADR'] = self.ta.adr_percent(test_df, 20)
-        test_df['High_20'] = test_df['High'].shift(1).rolling(20).max()
-        test_df['AvgVol_50'] = test_df['Volume'].shift(1).rolling(50).mean()
-        
-        test_df = test_df.tail(252).copy()
-        
-        in_position = False
-        entry_price = 0
-        initial_stop = 0
-        entry_date = None
-        trades = []
-        buy_signals = []
-        sell_signals = []
-        
-        # 效能優化: 使用 itertuples 代替 iterrows
-        for row in test_df.itertuples():
-            date = row.Index
-            
-            if not in_position:
-                # 判斷是否爆量 (處理除以零或缺失值)
-                vol_surge = False
-                if not pd.isna(row.AvgVol_50) and row.AvgVol_50 > 0:
-                    vol_surge = row.Volume > (row.AvgVol_50 * 1.5)
-                
-                if (row.High > row.High_20 and 
-                    row.EMA10 > row.EMA20 > row.SMA50 and 
-                    row.ADR > 3.0 and 
-                    vol_surge):
-                    
-                    in_position = True
-                    # 改進 2: 真實入場價 (考慮跳空缺口)
-                    entry_price = max(row.High_20, row.Open) 
-                    # 改進 3: 嚴格初始止損 (突破日低點 或 入場價的 -5%)
-                    initial_stop = max(row.Low, entry_price * 0.95) 
-                    entry_date = date
-                    buy_signals.append((date, entry_price))
-            else:
-                # 動態止損線：初始止損與 EMA20，取較高值 (Trailing Stop)
-                current_stop = max(initial_stop, row.EMA20)
-                
-                # 觸發止損/止盈
-                if row.Low < current_stop:
-                    in_position = False
-                    # 真實出場價：考慮跳空低開直接市價止損
-                    exit_price = min(current_stop, row.Open) 
-                    
-                    pnl_pct = (exit_price / entry_price - 1) * 100
-                    trades.append({
-                        'entry_date': entry_date, 'entry_price': entry_price,
-                        'exit_date': date, 'exit_price': exit_price, 'pnl_pct': pnl_pct
-                    })
-                    sell_signals.append((date, exit_price))
-                    
-        if in_position:
-            pnl_pct = (test_df['Close'].iloc[-1] / entry_price - 1) * 100
-            trades.append({
-                'entry_date': entry_date, 'entry_price': entry_price,
-                'exit_date': test_df.index[-1], 'exit_price': test_df['Close'].iloc[-1], 'pnl_pct': pnl_pct, 'open': True
-            })
-
-        wins = [t for t in trades if t['pnl_pct'] > 0]
-        losses = [t for t in trades if t['pnl_pct'] <= 0]
-        
-        win_rate = (len(wins) / len(trades) * 100) if trades else 0
-        avg_win = np.mean([t['pnl_pct'] for t in wins]) if wins else 0
-        avg_loss = np.mean([t['pnl_pct'] for t in losses]) if losses else 0
-        
-        # 期望值 (Expectancy)
-        expectancy = (win_rate/100 * avg_win) + ((1 - win_rate/100) * avg_loss) if trades else 0
-        
-        return {
-            'trades': len(trades), 'win_rate': win_rate, 'avg_win': avg_win, 'avg_loss': avg_loss,
-            'expectancy': expectancy, 'history': trades, 'buy_marks': buy_signals, 'sell_marks': sell_signals, 'test_df': test_df
-        }
 
 # ============================================
 # 🌡️ MARKET REGIME
@@ -744,8 +705,7 @@ class ChartBuilder:
 # ============================================
 def main():
     st.set_page_config(page_title=CONFIG.PAGE_TITLE, page_icon=CONFIG.PAGE_ICON, layout="wide")
-    st.title(f"{CONFIG.PAGE_ICON} Market Radar v9.0 Ultimate Qullamaggie")
-    st.caption("批量掃描 | Swing Points VCP | Qullamaggie 回測引擎 | 執行價精準修正")
+    st.title(f"{CONFIG.PAGE_ICON} Market Radar v9.5 Ultimate")
     
     market = MarketRegime.get_health()
     cols = st.columns(4)
@@ -756,15 +716,199 @@ def main():
     
     st.divider()
     
-    tabs = st.tabs([
-        "📊 個股分析",
-        "💰 Short Put 收租",
-        "🎯 VCP 橫盤爆發",
-        "🦊 Qullamaggie 動能突破" 
-    ])
+    tabs = st.tabs(["🦊 Qullamaggie 動能突破", "💰 Short Put 收租", "🎯 VCP 橫盤爆發", "📊 個股分析"])
     
-    # ===== TAB 1: Stock Analysis =====
+    # ===== TAB 1: Qullamaggie =====
     with tabs[0]:
+        st.header("🦊 Kristjan Kullamägi (EP/HTF) 動能突破")
+        st.info("""
+        **Qullamaggie 核心心法：**
+        - **趨勢:** 價格必須在 EMA10 > EMA20 > SMA50 之上。
+        - **動能:** 過去 1~3 個月內漲幅巨大 (>30%)，波動 ADR(20) > 4%。
+        - **進場:** 盤中突破 Pivot 且伴隨**成交量激增 (>1.5倍)**，**切勿等待收盤！**
+        - **止損:** 初始止損設在突破日低點，之後用 EMA20 追蹤止損 (Trailing Stop)。
+        """)
+        
+        sub_tabs = st.tabs(["🔍 今日突破掃描 (Screener)", "⏪ 單股策略回測 (Single)", "🏆 歷史妖股排行榜 (Batch Scan)"])
+        q_strategy = QullamaggieStrategy()
+        
+        with sub_tabs[0]:
+            st.subheader("尋找即將爆發的妖股")
+            if st.button("掃描熱門股 Setup", type="primary"):
+                stocks = STOCK_UNIVERSE['High Growth'] + STOCK_UNIVERSE['Semiconductors']
+                with st.spinner("掃描中..."):
+                    all_data = BatchDataFetcher.batch_download(stocks, period='6mo')
+                    results = []
+                    for ticker in stocks:
+                        df = all_data.get(ticker)
+                        if df is not None:
+                            cand = q_strategy.screen(df, ticker)
+                            if cand: results.append(cand)
+                    results.sort(key=lambda x: x.score, reverse=True)
+                    
+                    st.success(f"找到 {len(results)} 隻符合 Qullamaggie 盤整型態的股票")
+                    for r in results:
+                        with st.expander(f"🚀 **{r.ticker}** | ADR: {r.adr:.1f}% | 評分: {r.score}"):
+                            c1, c2 = st.columns(2)
+                            with c1:
+                                st.write(f"- **現價:** ${r.price:.2f}")
+                                st.write(f"- **3個月漲幅:** {r.momentum_3m:.1f}%")
+                                st.write(f"- **近期緊縮度:** {r.consolidation_tightness:.1f}%")
+                            with c2:
+                                for note in r.notes: st.write(note)
+                            
+                            st.divider()
+                            st.markdown("### 📋 交易計劃 (Trade Plan)")
+                            st.warning(f"**操作指令 (Buy Stop Limit):** 當盤中股價衝破 **${r.pivot_price:.2f}** 且成交量異常放大時，立即追入！")
+                            c3, c4 = st.columns(2)
+                            with c3: st.metric("🎯 突破買入點 (Pivot)", f"${r.pivot_price:.2f}")
+                            with c4: st.metric("🛑 初始止損點 (Stop Loss)", f"${r.stop_loss:.2f}", help="跌破此價位立即停損")
+                                
+        with sub_tabs[1]:
+            st.subheader("驗證策略有效性 (1-Year Backtest)")
+            bt_ticker = st.text_input("輸入要回測的股票代碼 (例如: NVDA, SMCI, PLTR)", value="PLTR").upper()
+            
+            if st.button("▶️ 執行策略回測", key="run_bt"):
+                with st.spinner(f"正在以機構級精度計算 {bt_ticker}..."):
+                    df = BatchDataFetcher.get_single_stock(bt_ticker, "2y")
+                    if df is not None:
+                        bt_result = q_strategy.backtest_1yr(df)
+                        if bt_result['trades'] > 0:
+                            st.success(f"回測完成！過去一年共觸發 {bt_result['trades']} 次精準突破信號。")
+                            m1, m2, m3, m4, m5 = st.columns(5)
+                            m1.metric("交易次數", bt_result['trades'])
+                            m2.metric("策略勝率", f"{bt_result['win_rate']:.1f}%")
+                            m3.metric("平均獲利", f"+{bt_result['avg_win']:.1f}%")
+                            m4.metric("平均虧損", f"{bt_result['avg_loss']:.1f}%")
+                            m5.metric("每筆期望值", f"{bt_result['expectancy']:+.2f}%", help="數學期望值，正數代表長期賺錢")
+                            
+                            fig = ChartBuilder.create_qullamaggie_chart(bt_result['test_df'], bt_ticker, bt_result['buy_marks'], bt_result['sell_marks'])
+                            st.plotly_chart(fig, use_container_width=True)
+                            
+                            st.markdown("### 📜 交易記錄")
+                            history_df = pd.DataFrame(bt_result['history'])
+                            history_df['entry_date'] = history_df['entry_date'].dt.strftime('%Y-%m-%d')
+                            history_df['exit_date'] = history_df['exit_date'].dt.strftime('%Y-%m-%d')
+                            history_df['pnl_pct'] = history_df['pnl_pct'].apply(lambda x: f"{x:+.2f}%")
+                            st.dataframe(history_df, use_container_width=True)
+                        else: st.warning(f"{bt_ticker} 過去一年沒有觸發信號。")
+                    else: st.error("無法獲取數據。")
+
+        with sub_tabs[2]:
+            st.subheader("🏆 歷史妖股掃描 (Batch Backtest)")
+            st.write("自動掃描板塊內所有股票，找出過去一年使用該策略賺最多錢的標的。")
+            scan_group = st.selectbox("選擇掃描板塊", ["高成長股 (High Growth)", "半導體 (Semiconductors)", "軟件雲端 (Software)"])
+            
+            if st.button("🚀 啟動歷史掃描"):
+                target_stocks = STOCK_UNIVERSE['High Growth'] if "高成長" in scan_group else STOCK_UNIVERSE['Semiconductors'] if "半導體" in scan_group else STOCK_UNIVERSE['Software & Cloud']
+                with st.spinner(f"正在批量下載 {len(target_stocks)} 隻股票數據並進行回測..."):
+                    all_data = BatchDataFetcher.batch_download(target_stocks, period="2y")
+                    leaderboard = []
+                    for ticker in target_stocks:
+                        df = all_data.get(ticker)
+                        if df is not None:
+                            res = q_strategy.backtest_1yr(df)
+                            if res['trades'] > 0:
+                                leaderboard.append({
+                                    "Ticker": ticker, "交易次數": res['trades'], "勝率 (%)": round(res['win_rate'], 1),
+                                    "平均獲利 (%)": round(res['avg_win'], 1), "期望值 (%)": round(res['expectancy'], 2),
+                                    "總利潤 (%)": round(res['total_pnl'], 2)
+                                })
+                    
+                    if leaderboard:
+                        lb_df = pd.DataFrame(leaderboard).sort_values(by="總利潤 (%)", ascending=False).reset_index(drop=True)
+                        st.success("掃描完成！以下是過去一年的策略表現排行榜：")
+                        st.dataframe(lb_df.style.background_gradient(subset=['總利潤 (%)', '期望值 (%)'], cmap='Greens'), use_container_width=True)
+                        st.info("💡 **解讀:** 總利潤或期望值最高的股票，代表它的『股性』非常適合突破策略，建議加入重點監控名單。")
+                    else: st.warning("該板塊內沒有股票觸發信號。")
+
+    # ===== TAB 2: Short Put Screener =====
+    with tabs[1]:
+        st.header("💰 Short Put 收租選股器 (恐慌支撐反彈)")
+        st.info("""
+        **全新邏輯：不買死魚股，只買錯殺的強勢股！**
+        - ✅ 長期牛市 (Price > SMA200)
+        - ✅ 短期恐慌 (距高點回調 5%-15%，RSI < 45)
+        - ✅ 精準踩點 (距離 SMA50/SMA100/布林下軌 < 4%)
+        - ✅ 拒絕飛刀 (MACD 綠柱開始縮短，動能衰竭)
+        """)
+        
+        c1, c2 = st.columns(2)
+        with c1: sp_scope = st.selectbox("掃描範圍", ["🏦 藍籌股 (30隻)", "💵 高息股 (20隻)", "🔥 熱門股 (20隻)"], key="sp_scope")
+        with c2: sp_quality = st.selectbox("最低質量", ["全部", "只看 A+ 和 A", "只看 A+"], key="sp_quality")
+        
+        if st.button("🔍 批量掃描收租機會", type="primary", key="scan_sp"):
+            stocks = STOCK_UNIVERSE['Blue Chips (Short Put)'] if "藍籌" in sp_scope else STOCK_UNIVERSE['Dividend Stocks'] if "高息" in sp_scope else STOCK_UNIVERSE['Market Leaders']
+            screener, pb, st_txt = ShortPutScreener(), st.progress(0), st.empty()
+            
+            def upd(i, t, tic): pb.progress(min((i + 1) / t, 1.0)); st_txt.text(f"掃描 {tic}...")
+            with st.spinner("批量下載數據..."): results = screener.scan_batch(stocks, upd)
+            pb.empty(); st_txt.empty()
+            
+            if "只看 A+" in sp_quality: results = [r for r in results if r.quality == 'A+']
+            elif "只看 A+ 和 A" in sp_quality: results = [r for r in results if r.quality in ['A+', 'A']]
+            st.session_state['sp_results'] = results
+            
+        if 'sp_results' in st.session_state:
+            res = st.session_state['sp_results']
+            st.success(f"找到 {len(res)} 個安全收租機會")
+            for c in res[:10]:
+                em = "⭐" if c.quality == 'A+' else "✅" if c.quality == 'A' else "⚠️"
+                with st.expander(f"{em} **{c.ticker}** | {c.quality} | {c.score:.0f}分"):
+                    c1, c2, c3 = st.columns(3)
+                    with c1: 
+                        st.write(f"回調幅度: {c.pullback_depth:.1f}%")
+                        st.write(f"RSI: {c.rsi:.0f}")
+                        st.write(f"MACD止跌: {'✅' if c.macd_reversal else '❌'}")
+                    with c2: 
+                        st.write(f"最近支撐: {c.nearest_support}")
+                        st.write(f"支撐位: ${c.nearest_support_price:.2f}")
+                        st.write(f"距離支撐: {c.distance_to_support:.1f}%")
+                    with c3: 
+                        st.write(f"HV Rank: {c.hv_rank:.0f}%")
+                        st.write(f"SMA200: {'✅ 上方' if c.above_sma200 else '❌ 下方'}")
+                    
+                    st.divider()
+                    for note in c.notes: st.write(note)
+                    st.divider()
+                    st.markdown("### 💰 收租計畫")
+                    st.warning(f"**建議賣出 Put 的行使價 (Strike): ${c.suggested_strike:.2f}** (位於強支撐下方，具備極高安全邊際)")
+
+    # ===== TAB 3: VCP Screener =====
+    with tabs[2]:
+        st.header("🎯 VCP 橫盤爆發選股器")
+        c1, c2 = st.columns(2)
+        with c1: vcp_scope = st.selectbox("掃描範圍", ["🔥 熱門領導股", "🔬 半導體", "💻 軟件雲端", "🚀 高成長"], key="vcp_scope")
+        with c2: vcp_quality = st.selectbox("最低質量", ["全部", "只看 A+ 和 A", "只看 A+"], key="vcp_quality")
+        
+        if st.button("🔍 批量掃描 VCP", type="primary"):
+            stocks = STOCK_UNIVERSE['Market Leaders'] if "熱門" in vcp_scope else STOCK_UNIVERSE['Semiconductors'] if "半導體" in vcp_scope else STOCK_UNIVERSE['Software & Cloud'] if "軟件" in vcp_scope else STOCK_UNIVERSE['High Growth']
+            spy_df = BatchDataFetcher.get_single_stock('SPY', '1y')
+            screener, pb, st_txt = VCPScreener(), st.progress(0), st.empty()
+            
+            def upd(i, t, tic): pb.progress((i + 1) / t); st_txt.text(f"掃描 {tic}...")
+            with st.spinner("批量下載數據..."): results = screener.scan_batch(stocks, spy_df, upd)
+            pb.empty(); st_txt.empty()
+            
+            if "只看 A+" in vcp_quality: results = [r for r in results if r.quality == 'A+']
+            elif "只看 A+ 和 A" in vcp_quality: results = [r for r in results if r.quality in ['A+', 'A']]
+            st.session_state['vcp_results'] = results
+            
+        if 'vcp_results' in st.session_state:
+            res = st.session_state['vcp_results']
+            st.success(f"找到 {len(res)} 個 VCP 機會")
+            for c in res[:10]:
+                em = "⭐" if c.quality == 'A+' else "✅" if c.quality == 'A' else "⚠️"
+                with st.expander(f"{em} **{c.ticker}** | {c.quality} | {c.score:.0f}分 | BB {c.bb_width:.3f}"):
+                    st.write(f"**Pivot:** ${c.pivot_price:.2f} | **Entry:** ${c.entry_price:.2f} | **Stop:** ${c.stop_loss:.2f}")
+                    for note in c.notes: st.write(note)
+                    if st.button("查看圖表", key=f"vcp_{c.ticker}"):
+                        df = BatchDataFetcher.get_single_stock(c.ticker, "6mo")
+                        fig = ChartBuilder.create_chart_with_annotations(df, c.ticker, pivot=c.pivot_price, entry=c.entry_price, stop=c.stop_loss)
+                        st.plotly_chart(fig, use_container_width=True)
+
+    # ===== TAB 4: Stock Analysis =====
+    with tabs[3]:
         st.header("📊 個股深度分析")
         ticker = st.text_input("股票代碼", value="AAPL").upper()
         if st.button("🔍 分析", type="primary", key="analyze"):
@@ -796,9 +940,9 @@ def main():
                 c1, c2, c3 = st.columns(3)
                 c1.metric("最近支撐", f"${support_data.get('nearest_support_price', 0):.2f}", f"{support_data.get('nearest_support', 'N/A')}")
                 c2.metric("距離支撐", f"{support_data.get('distance_pct', 0):.1f}%")
-                c3.metric("SMA200", f"${support_data.get('sma200', 0):.2f}")
+                c3.metric("SMA200", f"${support_data.get('sma200_val', 0):.2f}")
                 
-                st.subheader("📊 期權數據")
+                st.subheader("📊 期權情緒數據")
                 c1, c2 = st.columns(2)
                 with c1:
                     pcr_data = pcr_calc.get_pcr(ticker)
@@ -816,146 +960,6 @@ def main():
                 st.subheader("📈 技術圖表")
                 fig = ChartBuilder.create_chart_with_annotations(df, ticker, support=support_data.get('nearest_support_price'))
                 st.plotly_chart(fig, use_container_width=True)
-
-    # ===== TAB 2: Short Put Screener =====
-    with tabs[1]:
-        st.header("💰 Short Put 收租選股器")
-        c1, c2 = st.columns(2)
-        with c1: sp_scope = st.selectbox("掃描範圍", ["🏦 藍籌股 (30隻)", "💵 高息股 (20隻)", "🔥 熱門股 (20隻)"], key="sp_scope")
-        with c2: sp_quality = st.selectbox("最低質量", ["全部", "只看 A+ 和 A", "只看 A+"], key="sp_quality")
-        
-        if st.button("🔍 批量掃描收租機會", type="primary"):
-            stocks = STOCK_UNIVERSE['Blue Chips (Short Put)'] if "藍籌" in sp_scope else STOCK_UNIVERSE['Dividend Stocks'] if "高息" in sp_scope else STOCK_UNIVERSE['Market Leaders']
-            spy_df = BatchDataFetcher.get_single_stock('SPY', '1y')
-            screener, pb, st_txt = ShortPutScreener(), st.progress(0), st.empty()
-            
-            def upd(i, t, tic): pb.progress(min((i + 1) / t, 1.0)); st_txt.text(f"掃描 {tic}...")
-            with st.spinner("批量下載數據..."): results = screener.scan_batch(stocks, spy_df, upd)
-            pb.empty(); st_txt.empty()
-            
-            if "只看 A+" in sp_quality: results = [r for r in results if r.quality == 'A+']
-            elif "只看 A+ 和 A" in sp_quality: results = [r for r in results if r.quality in ['A+', 'A']]
-            st.session_state['sp_results'] = results
-            
-        if 'sp_results' in st.session_state:
-            res = st.session_state['sp_results']
-            st.success(f"找到 {len(res)} 個收租機會")
-            for c in res[:10]:
-                em = "⭐" if c.quality == 'A+' else "✅" if c.quality == 'A' else "⚠️"
-                with st.expander(f"{em} **{c.ticker}** | {c.quality} | {c.score:.0f}分"):
-                    c1, c2, c3 = st.columns(3)
-                    with c1: st.write(f"ADX: {c.adx:.1f}\nSMA200: {'✅' if c.above_sma200 else '❌'}")
-                    with c2: st.write(f"最近支撐: {c.nearest_support}\n距離: {c.distance_to_support:.1f}%")
-                    with c3: st.write(f"IV: {c.real_iv if c.real_iv else c.hv_rank:.0f}%\nPCR: {c.pcr_oi:.2f}")
-                    st.write(f"**建議 Strike:** ${c.suggested_strike:.2f} | **年化估算:** {c.annual_return_est:.0f}%")
-
-    # ===== TAB 3: VCP Screener =====
-    with tabs[2]:
-        st.header("🎯 VCP 橫盤爆發選股器")
-        c1, c2 = st.columns(2)
-        with c1: vcp_scope = st.selectbox("掃描範圍", ["🔥 熱門領導股", "🔬 半導體", "💻 軟件雲端", "🚀 高成長"], key="vcp_scope")
-        with c2: vcp_quality = st.selectbox("最低質量", ["全部", "只看 A+ 和 A", "只看 A+"], key="vcp_quality")
-        
-        if st.button("🔍 批量掃描 VCP", type="primary"):
-            stocks = STOCK_UNIVERSE['Market Leaders'] if "熱門" in vcp_scope else STOCK_UNIVERSE['Semiconductors'] if "半導體" in vcp_scope else STOCK_UNIVERSE['Software & Cloud'] if "軟件" in vcp_scope else STOCK_UNIVERSE['High Growth']
-            spy_df = BatchDataFetcher.get_single_stock('SPY', '1y')
-            screener, pb, st_txt = VCPScreener(), st.progress(0), st.empty()
-            
-            def upd(i, t, tic): pb.progress((i + 1) / t); st_txt.text(f"掃描 {tic}...")
-            with st.spinner("批量下載數據..."): results = screener.scan_batch(stocks, spy_df, upd)
-            pb.empty(); st_txt.empty()
-            
-            if "只看 A+" in vcp_quality: results = [r for r in results if r.quality == 'A+']
-            elif "只看 A+ 和 A" in vcp_quality: results = [r for r in results if r.quality in ['A+', 'A']]
-            st.session_state['vcp_results'] = results
-            
-        if 'vcp_results' in st.session_state:
-            res = st.session_state['vcp_results']
-            st.success(f"找到 {len(res)} 個 VCP 機會")
-            for c in res[:10]:
-                em = "⭐" if c.quality == 'A+' else "✅" if c.quality == 'A' else "⚠️"
-                with st.expander(f"{em} **{c.ticker}** | {c.quality} | {c.score:.0f}分 | BB {c.bb_width:.3f}"):
-                    st.write(f"**Pivot:** ${c.pivot_price:.2f} | **Entry:** ${c.entry_price:.2f} | **Stop:** ${c.stop_loss:.2f}")
-                    if st.button("查看圖表", key=f"vcp_{c.ticker}"):
-                        df = BatchDataFetcher.get_single_stock(c.ticker, "6mo")
-                        fig = ChartBuilder.create_chart_with_annotations(df, c.ticker, pivot=c.pivot_price, entry=c.entry_price, stop=c.stop_loss)
-                        st.plotly_chart(fig, use_container_width=True)
-                        
-    # ===== TAB 4: Qullamaggie 策略 =====
-    with tabs[3]:
-        st.header("🦊 Kristjan Kullamägi (EP/HTF) 動能突破")
-        st.info("""
-        **Qullamaggie 核心心法：**
-        - **趨勢:** 價格必須在 EMA10 > EMA20 > SMA50 之上。
-        - **動能:** 過去 1~3 個月內漲幅巨大 (>30%)。
-        - **波動:** ADR(20) > 4% (只交易有活力的妖股)。
-        - **止損:** 初始止損設在突破日低點，之後用 EMA20 追蹤止損 (Trailing Stop)。
-        """)
-        
-        sub_tabs = st.tabs(["🔍 今日突破掃描 (Screener)", "⏪ 過去一年策略回測 (Backtest)"])
-        q_strategy = QullamaggieStrategy()
-        
-        with sub_tabs[0]:
-            st.subheader("尋找即將爆發的妖股")
-            if st.button("掃描熱門股 (Qullamaggie Setup)", type="primary"):
-                stocks = STOCK_UNIVERSE['High Growth'] + STOCK_UNIVERSE['Semiconductors'][:10]
-                with st.spinner("掃描中..."):
-                    all_data = BatchDataFetcher.batch_download(stocks, period='6mo')
-                    results = []
-                    for ticker in stocks:
-                        df = all_data.get(ticker)
-                        if df is not None:
-                            cand = q_strategy.screen(df, ticker)
-                            if cand: results.append(cand)
-                    results.sort(key=lambda x: x.score, reverse=True)
-                    st.success(f"找到 {len(results)} 隻符合 Qullamaggie 型態的股票")
-                    for r in results:
-                        with st.expander(f"🚀 **{r.ticker}** | ADR: {r.adr:.1f}% | 評分: {r.score}"):
-                            c1, c2 = st.columns(2)
-                            with c1:
-                                st.write(f"- **現價:** ${r.price:.2f}")
-                                st.write(f"- **3個月漲幅:** {r.momentum_3m:.1f}%")
-                                st.write(f"- **近期緊縮度:** {r.consolidation_tightness:.1f}%")
-                            with c2:
-                                for note in r.notes: st.write(note)
-                                
-        with sub_tabs[1]:
-            st.subheader("驗證策略有效性 (1-Year Backtest)")
-            bt_ticker = st.text_input("輸入要回測的股票代碼 (例如: NVDA, SMCI, PLTR)", value="PLTR").upper()
-            
-            if st.button("▶️ 執行策略回測", key="run_bt"):
-                with st.spinner(f"正在以機構級精度計算 {bt_ticker} 過去一年的交易信號..."):
-                    df = BatchDataFetcher.get_single_stock(bt_ticker, "2y")
-                    if df is not None:
-                        bt_result = q_strategy.backtest_1yr(df)
-                        
-                        if bt_result['trades'] > 0:
-                            st.success(f"回測完成！過去一年共觸發 {bt_result['trades']} 次精準 Qullamaggie 突破信號。")
-                            
-                            m1, m2, m3, m4, m5 = st.columns(5)
-                            m1.metric("交易次數", bt_result['trades'])
-                            m2.metric("策略勝率", f"{bt_result['win_rate']:.1f}%")
-                            m3.metric("平均獲利", f"+{bt_result['avg_win']:.1f}%")
-                            m4.metric("平均虧損", f"{bt_result['avg_loss']:.1f}%")
-                            # 新增 Expectancy UI
-                            m5.metric("每筆期望值", f"{bt_result['expectancy']:+.2f}%", help="每次出手預期賺多少%。正數代表這套策略長期會賺錢。")
-                            
-                            fig = ChartBuilder.create_qullamaggie_chart(
-                                bt_result['test_df'], bt_ticker, 
-                                buy_marks=bt_result['buy_marks'], 
-                                sell_marks=bt_result['sell_marks']
-                            )
-                            st.plotly_chart(fig, use_container_width=True)
-                            
-                            st.markdown("### 📜 交易記錄")
-                            history_df = pd.DataFrame(bt_result['history'])
-                            history_df['entry_date'] = history_df['entry_date'].dt.strftime('%Y-%m-%d')
-                            history_df['exit_date'] = history_df['exit_date'].dt.strftime('%Y-%m-%d')
-                            history_df['pnl_pct'] = history_df['pnl_pct'].apply(lambda x: f"{x:+.2f}%")
-                            st.dataframe(history_df, use_container_width=True)
-                        else:
-                            st.warning(f"{bt_ticker} 過去一年沒有觸發符合標準的 Qullamaggie 突破信號。")
-                    else: st.error("無法獲取數據，請檢查代碼。")
 
 if __name__ == "__main__":
     main()
