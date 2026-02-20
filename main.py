@@ -1,10 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-🎯 Market Structure Radar - v10.1 Ultimate (Added Strategy Logic Tab)
+🎯 Market Structure Radar - v10.1 Ultimate (Added Trade Log)
 =============================================================
 
 ✅ 保留 v10.0 全部強大功能 (AI Paper Trade, Minervini 模板, 批量回測等)
 ✅ 新增「📖 策略邏輯與優勢」導航頁面，深度解析三大策略底層思維
+✅ 升級：在單股回測中新增「逐筆交易明細 (Trade Log) 表格」
 
 Author: Pro Trader AI (Powered by Gemini)
 """
@@ -640,6 +641,39 @@ def main():
                             m3.metric("平均獲利", f"+{bt_result['avg_win']:.1f}%")
                             m4.metric("平均虧損", f"{bt_result['avg_loss']:.1f}%")
                             m5.metric("期望值", f"{bt_result['expectancy']:+.2f}%")
+                            
+                            # --- 🆕 新增：顯示所有交易明細表格 ---
+                            st.markdown("### 📝 過去一年交易明細 (Trade Log)")
+                            if bt_result['history']:
+                                hist_df = pd.DataFrame(bt_result['history'])
+                                # 格式化日期與價格
+                                hist_df['entry_date'] = hist_df['entry_date'].dt.strftime('%Y-%m-%d')
+                                hist_df['exit_date'] = hist_df['exit_date'].dt.strftime('%Y-%m-%d')
+                                hist_df['entry_price'] = hist_df['entry_price'].map(lambda x: f"${x:.2f}")
+                                hist_df['exit_price'] = hist_df['exit_price'].map(lambda x: f"${x:.2f}")
+                                
+                                # 標記是否為未平倉訂單
+                                if 'open' in hist_df.columns:
+                                    hist_df['狀態'] = hist_df['open'].apply(lambda x: "🟢 持倉中" if pd.notna(x) and x else "⚫ 已平倉")
+                                    hist_df = hist_df.drop(columns=['open'])
+                                else:
+                                    hist_df['狀態'] = "⚫ 已平倉"
+                                    
+                                # 重新命名欄位
+                                hist_df = hist_df.rename(columns={
+                                    'entry_date': '進場日期', 'entry_price': '進場價',
+                                    'exit_date': '出場/結算日', 'exit_price': '出場/現價', 'pnl_pct': '損益 (%)'
+                                })
+                                
+                                # 設定盈虧顏色 (綠賺紅虧)
+                                def color_pnl(val):
+                                    color = '#00CC96' if val > 0 else '#EF553B'
+                                    return f'color: {color}; font-weight: bold'
+                                    
+                                # 顯示表格
+                                st.dataframe(hist_df.style.map(color_pnl, subset=['損益 (%)']).format({'損益 (%)': '{:+.2f}%'}), use_container_width=True)
+                            # -----------------------------------
+
                             fig = ChartBuilder.create_qullamaggie_chart(bt_result['test_df'], bt_ticker, bt_result['buy_marks'], bt_result['sell_marks'])
                             st.plotly_chart(fig, use_container_width=True)
                         else: st.warning(f"{bt_ticker} 無觸發信號。")
