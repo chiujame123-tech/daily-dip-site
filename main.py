@@ -30,7 +30,14 @@ warnings.filterwarnings('ignore')
 # ============================================
 # ⚙️ CONFIGURATION & STATE
 # ============================================
-st.set_page_config(page_title="Market Radar v10.0", page_icon="📈", layout="wide", initial_sidebar_state="expanded")
+@dataclass
+class Config:
+    PAGE_TITLE: str = "Market Radar v10.0"
+    PAGE_ICON: str = "🎯"
+
+CONFIG = Config()
+
+st.set_page_config(page_title=CONFIG.PAGE_TITLE, page_icon=CONFIG.PAGE_ICON, layout="wide", initial_sidebar_state="expanded")
 
 if 'paper_trades' not in st.session_state:
     st.session_state.paper_trades = {}
@@ -751,3 +758,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
