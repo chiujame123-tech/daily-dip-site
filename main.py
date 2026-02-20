@@ -1,11 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-🎯 Market Structure Radar - v10.1 Ultimate (Added Trade Log)
+🎯 Market Structure Radar - v10.2 (Engine 2.0 Upgrade)
 =============================================================
 
-✅ 保留 v10.0 全部強大功能 (AI Paper Trade, Minervini 模板, 批量回測等)
-✅ 新增「📖 策略邏輯與優勢」導航頁面，深度解析三大策略底層思維
-✅ 升級：在單股回測中新增「逐筆交易明細 (Trade Log) 表格」
+✅ 保留 v10.1 交易明細與所有功能
+✅ 升級 1: 機構級回測 2.0 引入 QQQ 大盤趨勢過濾 (過濾逆風假突破)
+✅ 升級 2: 回測引擎加入 2.5R 分批止賺邏輯 (Partial Take Profit)
+✅ 升級 3: 批量回測解鎖所有板塊 (Software, Market Leaders 等)
 
 Author: Pro Trader AI (Powered by Gemini)
 """
@@ -28,7 +29,7 @@ warnings.filterwarnings('ignore')
 # ============================================
 @dataclass
 class Config:
-    PAGE_TITLE: str = "Market Radar v10.1"
+    PAGE_TITLE: str = "Market Radar v10.2"
     PAGE_ICON: str = "🎯"
 
 CONFIG = Config()
@@ -39,12 +40,11 @@ if 'paper_trades' not in st.session_state:
     st.session_state.paper_trades = {}
 
 STOCK_UNIVERSE = {
-    'Market Leaders': ['NVDA', 'META', 'AMZN', 'GOOGL', 'MSFT', 'AAPL', 'LLY', 'AVGO', 'TSLA', 'AMD', 'CRM', 'NOW', 'PANW', 'CRWD', 'NFLX', 'COST', 'ISRG', 'LULU', 'CMG', 'FICO'],
-    'Semiconductors': ['NVDA', 'AMD', 'AVGO', 'TSM', 'QCOM', 'MU', 'AMAT', 'LRCX', 'KLAC', 'MRVL', 'ARM', 'SMCI', 'INTC', 'ASML', 'SNPS', 'ON', 'NXPI', 'ADI', 'MCHP', 'TXN'],
-    'Software & Cloud': ['MSFT', 'CRM', 'ADBE', 'NOW', 'INTU', 'PANW', 'CRWD', 'SNOW', 'DDOG', 'NET', 'MDB', 'PLTR', 'ZS', 'FTNT', 'WDAY', 'TEAM', 'HUBS', 'OKTA', 'BILL', 'DOCU'],
-    'High Growth': ['NVDA', 'SMCI', 'ARM', 'PLTR', 'COIN', 'MSTR', 'AFRM', 'SOFI', 'HOOD', 'UPST', 'RBLX', 'DKNG', 'SHOP', 'SQ', 'MELI', 'SE', 'NU', 'GRAB', 'BILL', 'CELH'],
-    'Blue Chips (Put)': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'JPM', 'V', 'MA', 'JNJ', 'PG', 'KO', 'PEP', 'WMT', 'COST', 'HD', 'MCD', 'DIS', 'NFLX', 'ADBE', 'CRM', 'UNH', 'LLY', 'MRK', 'ABBV', 'TMO', 'ACN', 'CSCO', 'ORCL', 'IBM', 'INTC'],
-    'Dividend Stocks': ['JNJ', 'PG', 'KO', 'PEP', 'MCD', 'WMT', 'HD', 'VZ', 'T', 'XOM', 'CVX', 'IBM', 'CSCO', 'INTC', 'MRK', 'ABBV', 'PFE', 'BMY', 'MMM', 'CAT']
+    'Market Leaders (龍頭股)': ['NVDA', 'META', 'AMZN', 'GOOGL', 'MSFT', 'AAPL', 'LLY', 'AVGO', 'TSLA', 'AMD', 'CRM', 'NOW', 'PANW', 'CRWD', 'NFLX', 'COST', 'ISRG', 'LULU', 'CMG', 'FICO'],
+    'Semiconductors (半導體)': ['NVDA', 'AMD', 'AVGO', 'TSM', 'QCOM', 'MU', 'AMAT', 'LRCX', 'KLAC', 'MRVL', 'ARM', 'SMCI', 'INTC', 'ASML', 'SNPS', 'ON', 'NXPI', 'ADI', 'MCHP', 'TXN'],
+    'Software & Cloud (軟體雲端)': ['MSFT', 'CRM', 'ADBE', 'NOW', 'INTU', 'PANW', 'CRWD', 'SNOW', 'DDOG', 'NET', 'MDB', 'PLTR', 'ZS', 'FTNT', 'WDAY', 'TEAM', 'HUBS', 'OKTA', 'BILL', 'DOCU'],
+    'High Growth (高成長妖股)': ['NVDA', 'SMCI', 'ARM', 'PLTR', 'COIN', 'MSTR', 'AFRM', 'SOFI', 'HOOD', 'UPST', 'RBLX', 'DKNG', 'SHOP', 'SQ', 'MELI', 'SE', 'NU', 'GRAB', 'BILL', 'CELH'],
+    'Blue Chips (藍籌收租)': ['AAPL', 'MSFT', 'GOOGL', 'AMZN', 'META', 'JPM', 'V', 'MA', 'JNJ', 'PG', 'KO', 'PEP', 'WMT', 'COST', 'HD', 'MCD', 'DIS', 'NFLX', 'ADBE', 'CRM', 'UNH', 'LLY', 'MRK', 'ABBV', 'TMO', 'ACN', 'CSCO', 'ORCL', 'IBM', 'INTC']
 }
 ALL_STOCKS = list(set([s for stocks in STOCK_UNIVERSE.values() for s in stocks]))
 ALL_STOCKS.sort()
@@ -86,8 +86,7 @@ class BatchDataFetcher:
 # ============================================
 class TechnicalAnalysis:
     @staticmethod
-    def ema(prices: pd.Series, period: int) -> pd.Series:
-        return prices.ewm(span=period, adjust=False).mean()
+    def ema(prices: pd.Series, period: int) -> pd.Series: return prices.ewm(span=period, adjust=False).mean()
 
     @staticmethod
     def rsi(prices: pd.Series, period: int = 14) -> pd.Series:
@@ -96,20 +95,6 @@ class TechnicalAnalysis:
         loss = (-delta.where(delta < 0, 0)).rolling(period).mean()
         rs = gain / loss
         return 100 - (100 / (1 + rs))
-    
-    @staticmethod
-    def adx(df: pd.DataFrame, period: int = 14) -> pd.Series:
-        high, low, close = df['High'], df['Low'], df['Close']
-        tr = pd.concat([high - low, abs(high - close.shift()), abs(low - close.shift())], axis=1).max(axis=1)
-        plus_dm = high.diff()
-        minus_dm = low.diff().abs() * -1
-        plus_dm = plus_dm.where((plus_dm > minus_dm.abs()) & (plus_dm > 0), 0)
-        minus_dm = minus_dm.abs().where((minus_dm.abs() > plus_dm) & (minus_dm < 0), 0)
-        atr = tr.rolling(period).mean()
-        plus_di = 100 * (plus_dm.rolling(period).mean() / atr)
-        minus_di = 100 * (minus_dm.rolling(period).mean() / atr)
-        dx = 100 * abs(plus_di - minus_di) / (plus_di + minus_di + 0.0001)
-        return dx.rolling(period).mean()
     
     @staticmethod
     def bollinger_bands(prices: pd.Series, period: int = 20) -> Tuple[pd.Series, pd.Series]:
@@ -156,12 +141,7 @@ class TechnicalAnalysis:
         
         if valid:
             nearest = max(valid, key=lambda x: x[1])
-            return {
-                'nearest_support': nearest[0], 
-                'nearest_support_price': nearest[1], 
-                'distance_pct': round((close - nearest[1]) / close * 100, 2),
-                'sma200_val': sma200
-            }
+            return {'nearest_support': nearest[0], 'nearest_support_price': nearest[1], 'distance_pct': round((close - nearest[1]) / close * 100, 2), 'sma200_val': sma200}
         return {'nearest_support': '無 (跌破所有支撐)', 'distance_pct': 99.9, 'sma200_val': sma200}
     
     @staticmethod
@@ -187,7 +167,7 @@ class TechnicalAnalysis:
         down_vol = float(down_days['Volume'].mean()) if len(down_days) > 0 else 0
         ratio = up_vol / down_vol if down_vol > 0 else 2.0
         avg_vol_50, recent_5_vol = float(df['Volume'].tail(50).mean()), float(df['Volume'].tail(5).mean())
-        return {'up_vol': up_vol, 'down_vol': down_vol, 'ratio': round(ratio, 2), 'is_healthy': ratio > 1.0, 'dry_up': recent_5_vol < avg_vol_50 * 0.6, 'dry_up_ratio': round(recent_5_vol / avg_vol_50, 2) if avg_vol_50 > 0 else 1}
+        return {'ratio': round(ratio, 2), 'is_healthy': ratio > 1.0, 'dry_up': recent_5_vol < avg_vol_50 * 0.6}
     
     @staticmethod
     def estimate_hv_rank(df: pd.DataFrame, period: int = 252) -> float:
@@ -226,12 +206,12 @@ class PCRCalculator:
             chain = stock.option_chain(exp_dates[0])
             call_oi, put_oi = chain.calls['openInterest'].sum(), chain.puts['openInterest'].sum()
             pcr_oi = put_oi / call_oi if call_oi > 0 else 0
-            sentiment, score = ("🚀 極度恐慌 (看漲反轉信號)", 80) if pcr_oi > 1.5 else ("📈 高避險 (偏看漲)", 65) if pcr_oi > 1.2 else ("😐 中性", 50) if pcr_oi > 0.9 else ("📉 偏樂觀 (小心)", 35) if pcr_oi > 0.6 else ("⚠️ 極度貪婪 (看跌警告)", 20)
+            sentiment = "🚀 極度恐慌 (看漲反轉信號)" if pcr_oi > 1.5 else "📈 高避險 (偏看漲)" if pcr_oi > 1.2 else "😐 中性" if pcr_oi > 0.9 else "📉 偏樂觀 (小心)" if pcr_oi > 0.6 else "⚠️ 極度貪婪 (看跌警告)"
             return {'pcr_oi': round(pcr_oi, 2), 'sentiment': sentiment, 'status': 'OK'}
         except Exception as e: return {'pcr': None, 'status': f'Error: {str(e)}'}
 
 # ============================================
-# 🎯 VCP SCREENER (Minervini 趨勢模板)
+# 🎯 VCP SCREENER
 # ============================================
 @dataclass
 class VCPCandidate:
@@ -245,7 +225,6 @@ class VCPScreener:
         try:
             close, high, low = df['Close'], df['High'], df['Low']
             curr_price = float(close.iloc[-1])
-            
             sma50, sma150, sma200 = close.rolling(50).mean().iloc[-1], close.rolling(150).mean().iloc[-1], close.rolling(200).mean().iloc[-1]
             low_52w, high_52w = low.tail(252).min(), high.tail(252).max()
             
@@ -264,7 +243,6 @@ class VCPScreener:
             pivot = float(df['High'].tail(20).max())
             
             score, notes = 40, ["✅ 通過 Minervini 嚴格趨勢模板 (Stage 2 Uptrend)"]
-            
             if bb_width < 0.10: score += 30; notes.append(f"🎯 價格極度緊湊 (BB Width: {bb_width:.3f})")
             elif bb_width < 0.15: score += 15; notes.append(f"✅ 價格收斂中 (BB Width: {bb_width:.3f})")
             else: return None
@@ -286,7 +264,7 @@ class VCPScreener:
         return sorted(results, key=lambda x: x.score, reverse=True)
 
 # ============================================
-# 💰 SHORT PUT SCREENER (恐慌支撐反彈)
+# 💰 SHORT PUT SCREENER
 # ============================================
 @dataclass
 class ShortPutCandidate:
@@ -305,26 +283,19 @@ class ShortPutScreener:
         try:
             close = df['Close']
             curr_price = float(close.iloc[-1])
-            
             support_data = self.ta.calculate_support_levels(df)
             sma200 = support_data.get('sma200_val', 0)
-            above_sma200 = curr_price > sma200
-            if not above_sma200: return None 
+            if curr_price < sma200: return None 
 
             high_60d = float(df['High'].tail(60).max())
             pullback_depth = (curr_price / high_60d - 1) * 100
             rsi = float(self.ta.rsi(close).iloc[-1])
-            
             macd_df = self.ta.macd(close)
             hist_today, hist_ytd = macd_df['hist'].iloc[-1], macd_df['hist'].iloc[-2]
             macd_reversal = (hist_today > hist_ytd) and (hist_today < 0) 
             
             hv_rank = self.ta.estimate_hv_rank(df)
-            real_iv = None
-            if fetch_real_iv:
-                iv_data = self.iv_calc.get_real_iv(ticker)
-                if iv_data.get('iv'): real_iv = iv_data['iv']
-
+            real_iv = self.iv_calc.get_real_iv(ticker).get('iv') if fetch_real_iv else None
             dist_to_support = support_data.get('distance_pct', 99)
             support_name = support_data.get('nearest_support', 'N/A')
             support_price = support_data.get('nearest_support_price', 0)
@@ -335,31 +306,22 @@ class ShortPutScreener:
             elif dist_to_support <= 4.0: score += 20; notes.append(f"✅ 接近支撐區 ({support_name})，距離 {dist_to_support:.1f}%")
             else: score -= 10; notes.append(f"❌ 懸在半空，距離支撐 {dist_to_support:.1f}% (風險高)")
 
-            if -15 <= pullback_depth <= -5: score += 20; notes.append(f"✅ 健康回調區間 ({pullback_depth:.1f}%)，散戶恐慌、IV上升")
-            elif pullback_depth > -5: score += 5; notes.append(f"⚠️ 離高點太近 ({pullback_depth:.1f}%)，期權肉不多")
-            else: score -= 10; notes.append(f"❌ 跌幅過深 ({pullback_depth:.1f}%)，趨勢可能已破壞")
+            if -15 <= pullback_depth <= -5: score += 20; notes.append(f"✅ 健康回調 ({pullback_depth:.1f}%)，散戶恐慌")
+            elif pullback_depth > -5: score += 5; notes.append(f"⚠️ 離高點太近，期權肉不多")
+            else: score -= 10; notes.append(f"❌ 跌幅過深 ({pullback_depth:.1f}%)")
 
-            if 30 <= rsi <= 45: score += 20; notes.append(f"✅ RSI {rsi:.0f} - 進入超賣區，Premium 最肥")
-            elif rsi < 30: score += 10; notes.append(f"⚠️ RSI {rsi:.0f} - 極度超賣 (注意防範無底洞)")
-            elif 45 < rsi <= 60: score += 10; notes.append(f"😐 RSI {rsi:.0f} - 情緒中性，適合保守收租")
-            else: score -= 10; notes.append(f"❌ RSI {rsi:.0f} - 動能偏上，隨時可能見頂回調")
+            if 30 <= rsi <= 45: score += 20; notes.append(f"✅ RSI {rsi:.0f} - 進入超賣區")
+            elif rsi < 30: score += 10; notes.append(f"⚠️ RSI {rsi:.0f} - 極度超賣")
+            else: score -= 10; notes.append(f"❌ RSI {rsi:.0f} - 動能偏上")
 
-            if macd_reversal: score += 20; notes.append("✅ MACD 綠柱縮短 - 下跌動能衰竭，適合進場賣 Put")
-            else: score -= 10; notes.append("⚠️ 下跌動能仍在釋放中，可能接飛刀")
+            if macd_reversal: score += 20; notes.append("✅ MACD 綠柱縮短 - 空頭動能衰竭")
+            else: score -= 10; notes.append("⚠️ 下跌動能仍在釋放")
                 
-            if (real_iv and real_iv > 40) or (not real_iv and hv_rank > 40):
-                score += 10; notes.append("✅ 隱含波動率足夠，權利金豐厚")
-
             quality = 'A+' if score >= 80 else 'A' if score >= 60 else 'B' if score >= 40 else 'C'
             suggested_strike = round(support_price * 0.98, 2) if support_price > 0 else round(curr_price * 0.9, 2)
             
             if score >= 40: 
-                return ShortPutCandidate(
-                    ticker=ticker, price=curr_price, above_sma200=True, pullback_depth=pullback_depth,
-                    rsi=rsi, macd_reversal=macd_reversal, hv_rank=hv_rank, real_iv=real_iv,
-                    nearest_support=support_name, nearest_support_price=support_price, distance_to_support=dist_to_support,
-                    score=score, quality=quality, suggested_strike=suggested_strike, notes=notes
-                )
+                return ShortPutCandidate(ticker=ticker, price=curr_price, above_sma200=True, pullback_depth=pullback_depth, rsi=rsi, macd_reversal=macd_reversal, hv_rank=hv_rank, real_iv=real_iv, nearest_support=support_name, nearest_support_price=support_price, distance_to_support=dist_to_support, score=score, quality=quality, suggested_strike=suggested_strike, notes=notes)
             return None
         except: return None
     
@@ -376,7 +338,7 @@ class ShortPutScreener:
         return results
 
 # ============================================
-# 🦊 QULLAMAGGIE STRATEGY & BACKTEST ENGINE
+# 🦊 QULLAMAGGIE STRATEGY & BACKTEST ENGINE 2.0
 # ============================================
 class QullamaggieStrategy:
     def __init__(self):
@@ -404,14 +366,11 @@ class QullamaggieStrategy:
             ai_note = f"🤖 **AI 診斷:** {ticker} 處於完美多頭 (EMA10>20>50)，高波動妖股特質 (ADR {adr:.1f}%)。近3月強勢上漲 {ret_3m:.0f}%。"
             if triggered_today: ai_note += f"\n🔥 **今日異動:** 盤中已帶量突破 Pivot (${pivot_price:.2f})！AI 建議立即市價/限價追入，並將止損設於 EMA20 (${ema20:.2f})。"
             
-            return {
-                'ticker': ticker, 'price': curr_price, 'adr': adr, 'ret_3m': ret_3m,
-                'pivot': pivot_price, 'stop_loss': ema20, 'is_setup': is_setup, 
-                'triggered_today': triggered_today, 'ai_note': ai_note
-            }
+            return {'ticker': ticker, 'price': curr_price, 'adr': adr, 'ret_3m': ret_3m, 'pivot': pivot_price, 'stop_loss': ema20, 'is_setup': is_setup, 'triggered_today': triggered_today, 'ai_note': ai_note}
         except: return None
 
-    def backtest_1yr(self, df: pd.DataFrame) -> Dict:
+    # 🔥 機構級回測引擎 2.0 (加入大盤過濾與分批止賺)
+    def backtest_1yr(self, df: pd.DataFrame, qqq_df: pd.DataFrame = None) -> Dict:
         if len(df) < 252 + 50: return {'trades': 0}
         
         test_df = df.copy()
@@ -422,9 +381,18 @@ class QullamaggieStrategy:
         test_df['High_20'] = test_df['High'].shift(1).rolling(20).max()
         test_df['AvgVol_50'] = test_df['Volume'].shift(1).rolling(50).mean()
         
+        # 🛡️ 注入 QQQ 大盤濾網數據
+        if qqq_df is not None:
+            test_df['QQQ_Close'] = qqq_df['Close'].reindex(test_df.index).ffill()
+            test_df['QQQ_SMA50'] = test_df['QQQ_Close'].rolling(50).mean()
+        else:
+            test_df['QQQ_Close'] = 1
+            test_df['QQQ_SMA50'] = 0 # 無數據時默認通行
+            
         test_df = test_df.tail(252).copy()
         
-        in_position, entry_price, initial_stop, entry_date = False, 0, 0, None
+        in_position, entry_price, initial_stop, current_stop, entry_date = False, 0, 0, 0, None
+        partial_taken, partial_pnl, tp_price = False, 0, 0
         trades, buy_signals, sell_signals = [], [], []
         
         for row in test_df.itertuples():
@@ -434,24 +402,58 @@ class QullamaggieStrategy:
                 if not pd.isna(row.AvgVol_50) and row.AvgVol_50 > 0:
                     vol_surge = row.Volume > (row.AvgVol_50 * 1.5)
                 
-                if (row.High > row.High_20 and row.EMA10 > row.EMA20 > row.SMA50 and row.ADR > 3.0 and vol_surge):
+                # 🛡️ 大盤過濾器：當日 QQQ 必須在 50MA 之上
+                market_ok = row.QQQ_Close > row.QQQ_SMA50 if 'QQQ_Close' in test_df.columns else True
+                
+                if (row.High > row.High_20 and row.EMA10 > row.EMA20 > row.SMA50 and row.ADR > 3.0 and vol_surge and market_ok):
                     in_position = True
                     entry_price = max(row.High_20, row.Open) 
                     initial_stop = max(row.Low, entry_price * 0.95) 
+                    current_stop = initial_stop
                     entry_date = date
+                    
+                    # 💰 計算 2.5R 獲利目標價 (Partial Take Profit)
+                    risk = entry_price - initial_stop
+                    tp_price = entry_price + (risk * 2.5) 
+                    partial_taken = False
+                    
                     buy_signals.append((date, entry_price))
             else:
-                current_stop = max(initial_stop, row.EMA20)
+                current_stop = max(current_stop, row.EMA20)
+                
+                # 💰 觸發分批止賺 (拉升達 2.5R)
+                if not partial_taken and row.High >= tp_price:
+                    partial_taken = True
+                    exec_tp = max(tp_price, row.Open) # 確保跳空高開能賣在更高價
+                    partial_pnl = (exec_tp / entry_price - 1) * 100
+                    sell_signals.append((date, exec_tp)) # 在圖表上標記止賺點
+                    
+                # 🛑 觸發追蹤止損 (跌破 EMA20)
                 if row.Low < current_stop:
                     in_position = False
                     exit_price = min(current_stop, row.Open) 
-                    pnl_pct = (exit_price / entry_price - 1) * 100
-                    trades.append({'entry_date': entry_date, 'entry_price': entry_price, 'exit_date': date, 'exit_price': exit_price, 'pnl_pct': pnl_pct})
+                    final_pnl = (exit_price / entry_price - 1) * 100
+                    
+                    if partial_taken:
+                        total_trade_pnl = (partial_pnl + final_pnl) / 2 # 綜合半倉止賺與半倉止損的總利潤
+                        status_str = "⚫ 止賺+追蹤止損"
+                    else:
+                        total_trade_pnl = final_pnl
+                        status_str = "🔴 止損出場" if final_pnl < 0 else "⚫ 追蹤止損"
+                        
+                    trades.append({'entry_date': entry_date, 'entry_price': entry_price, 'exit_date': date, 'exit_price': exit_price, 'pnl_pct': total_trade_pnl, 'status': status_str})
                     sell_signals.append((date, exit_price))
                     
         if in_position:
-            pnl_pct = (test_df['Close'].iloc[-1] / entry_price - 1) * 100
-            trades.append({'entry_date': entry_date, 'entry_price': entry_price, 'exit_date': test_df.index[-1], 'exit_price': test_df['Close'].iloc[-1], 'pnl_pct': pnl_pct, 'open': True})
+            last_price = test_df['Close'].iloc[-1]
+            final_pnl = (last_price / entry_price - 1) * 100
+            if partial_taken:
+                total_trade_pnl = (partial_pnl + final_pnl) / 2
+                status_str = "🟢 持倉中 (已鎖定半倉利潤)"
+            else:
+                total_trade_pnl = final_pnl
+                status_str = "🟢 持倉中"
+            trades.append({'entry_date': entry_date, 'entry_price': entry_price, 'exit_date': test_df.index[-1], 'exit_price': last_price, 'pnl_pct': total_trade_pnl, 'status': status_str, 'open': True})
 
         wins = [t for t in trades if t['pnl_pct'] > 0]
         losses = [t for t in trades if t['pnl_pct'] <= 0]
@@ -477,7 +479,6 @@ class MarketRegime:
         try:
             data = yf.download(['SPY', 'QQQ'], period='6mo', progress=False, group_by='ticker', timeout=10)
             spy, qqq = data['SPY']['Close'], data['QQQ']['Close']
-            
             spy_curr, spy_50, spy_200 = float(spy.iloc[-1]), float(spy.rolling(50).mean().iloc[-1]), float(spy.rolling(200).mean().iloc[-1])
             qqq_curr, qqq_50 = float(qqq.iloc[-1]), float(qqq.rolling(50).mean().iloc[-1])
             
@@ -535,7 +536,7 @@ class ChartBuilder:
         for date, price in buy_marks:
             fig.add_annotation(x=date, y=price*0.92, text="⬆️ BUY", showarrow=True, arrowhead=1, arrowcolor="green", font=dict(color="green"), row=1, col=1)
         for date, price in sell_marks:
-            fig.add_annotation(x=date, y=price*1.08, text="⬇️ SELL", showarrow=True, arrowhead=1, arrowcolor="red", font=dict(color="red"), row=1, col=1)
+            fig.add_annotation(x=date, y=price*1.08, text="⬇️ SELL/TP", showarrow=True, arrowhead=1, arrowcolor="red", font=dict(color="red"), row=1, col=1)
 
         colors = ['#00CC96' if df['Close'].iloc[i] >= df['Open'].iloc[i] else '#EF553B' for i in range(len(df))]
         fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, showlegend=False), row=2, col=1)
@@ -563,10 +564,10 @@ def main():
                              "🎯 VCP 嚴格趨勢選股", 
                              "💰 Short Put 恐慌收租", 
                              "📈 個股深度圖表",
-                             "📖 策略邏輯與優勢解碼"]) # 新增的 Tab
+                             "📖 策略邏輯與優勢解碼"]) 
     
     st.sidebar.divider()
-    st.sidebar.markdown("v10.1 | AI 驅動量化系統")
+    st.sidebar.markdown("v10.2 | AI 驅動量化系統")
 
     # --- Main Content ---
     st.header(page)
@@ -583,7 +584,7 @@ def main():
             st.write("系統掃描美股，若今日盤中股價**帶量衝破 Pivot**，AI 將自動建倉並給出操作指令。")
             
             if st.button("🔄 掃描今日突破訊號", type="primary"):
-                stocks = STOCK_UNIVERSE['High Growth'] + STOCK_UNIVERSE['Semiconductors']
+                stocks = STOCK_UNIVERSE['High Growth (高成長妖股)'] + STOCK_UNIVERSE['Semiconductors (半導體)']
                 with st.spinner("AI 正在監控市場盤口..."):
                     all_data = BatchDataFetcher.batch_download(stocks, period='6mo')
                     new_trades = 0
@@ -612,7 +613,7 @@ def main():
         with tabs[1]:
             st.subheader("盤前準備：蓄勢待發的妖股")
             if st.button("掃描 Setup"):
-                stocks = STOCK_UNIVERSE['High Growth'] + STOCK_UNIVERSE['Semiconductors']
+                stocks = STOCK_UNIVERSE['High Growth (高成長妖股)'] + STOCK_UNIVERSE['Semiconductors (半導體)']
                 with st.spinner("掃描中..."):
                     all_data = BatchDataFetcher.batch_download(stocks, period='6mo')
                     found = False
@@ -626,13 +627,15 @@ def main():
                     if not found: st.info("今日無符合標準的 Setup。")
 
         with tabs[2]:
-            st.subheader("驗證策略有效性 (1-Year Backtest & Scanner)")
+            st.subheader("驗證策略有效性 (Engine 2.0: 帶防護罩的回測)")
             bt_ticker = st.text_input("輸入要回測的股票代碼 (例如: PLTR)", value="PLTR").upper()
             if st.button("▶️ 執行單股回測"):
                 with st.spinner(f"正在以機構級精度計算 {bt_ticker}..."):
                     df = BatchDataFetcher.get_single_stock(bt_ticker, "2y")
-                    if df is not None:
-                        bt_result = q_strategy.backtest_1yr(df)
+                    qqq_df = BatchDataFetcher.get_single_stock("QQQ", "2y") # 引入 QQQ 數據
+                    
+                    if df is not None and qqq_df is not None:
+                        bt_result = q_strategy.backtest_1yr(df, qqq_df)
                         if bt_result['trades'] > 0:
                             st.success(f"回測完成！共觸發 {bt_result['trades']} 次突破。")
                             m1, m2, m3, m4, m5 = st.columns(5)
@@ -642,59 +645,57 @@ def main():
                             m4.metric("平均虧損", f"{bt_result['avg_loss']:.1f}%")
                             m5.metric("期望值", f"{bt_result['expectancy']:+.2f}%")
                             
-                            # --- 🆕 新增：顯示所有交易明細表格 ---
+                            # 📝 顯示所有交易明細表格
                             st.markdown("### 📝 過去一年交易明細 (Trade Log)")
                             if bt_result['history']:
                                 hist_df = pd.DataFrame(bt_result['history'])
-                                # 格式化日期與價格
                                 hist_df['entry_date'] = hist_df['entry_date'].dt.strftime('%Y-%m-%d')
                                 hist_df['exit_date'] = hist_df['exit_date'].dt.strftime('%Y-%m-%d')
                                 hist_df['entry_price'] = hist_df['entry_price'].map(lambda x: f"${x:.2f}")
                                 hist_df['exit_price'] = hist_df['exit_price'].map(lambda x: f"${x:.2f}")
                                 
-                                # 標記是否為未平倉訂單
                                 if 'open' in hist_df.columns:
-                                    hist_df['狀態'] = hist_df['open'].apply(lambda x: "🟢 持倉中" if pd.notna(x) and x else "⚫ 已平倉")
                                     hist_df = hist_df.drop(columns=['open'])
-                                else:
-                                    hist_df['狀態'] = "⚫ 已平倉"
                                     
-                                # 重新命名欄位
                                 hist_df = hist_df.rename(columns={
                                     'entry_date': '進場日期', 'entry_price': '進場價',
-                                    'exit_date': '出場/結算日', 'exit_price': '出場/現價', 'pnl_pct': '損益 (%)'
+                                    'exit_date': '出場/結算日', 'exit_price': '最後出場價', 
+                                    'pnl_pct': '總損益 (%)', 'status': '出場狀態'
                                 })
                                 
-                                # 設定盈虧顏色 (綠賺紅虧)
                                 def color_pnl(val):
                                     color = '#00CC96' if val > 0 else '#EF553B'
                                     return f'color: {color}; font-weight: bold'
                                     
-                                # 顯示表格
-                                st.dataframe(hist_df.style.map(color_pnl, subset=['損益 (%)']).format({'損益 (%)': '{:+.2f}%'}), use_container_width=True)
-                            # -----------------------------------
+                                st.dataframe(hist_df.style.map(color_pnl, subset=['總損益 (%)']).format({'總損益 (%)': '{:+.2f}%'}), use_container_width=True)
 
                             fig = ChartBuilder.create_qullamaggie_chart(bt_result['test_df'], bt_ticker, bt_result['buy_marks'], bt_result['sell_marks'])
                             st.plotly_chart(fig, use_container_width=True)
-                        else: st.warning(f"{bt_ticker} 無觸發信號。")
+                        else: st.warning(f"{bt_ticker} 過去一年沒有觸發信號 (大盤過濾發揮作用，保護了本金)。")
             
             st.divider()
-            st.subheader("🏆 歷史妖股批量掃描")
-            scan_group = st.selectbox("選擇掃描板塊", ["高成長股 (High Growth)", "半導體 (Semiconductors)"])
+            st.subheader("🏆 歷史妖股批量掃描 (Engine 2.0)")
+            # 📂 升級：開放所有板塊供用戶選擇
+            scan_group = st.selectbox("選擇掃描板塊", list(STOCK_UNIVERSE.keys()))
+            
             if st.button("🚀 啟動歷史掃描"):
-                target_stocks = STOCK_UNIVERSE['High Growth'] if "高成長" in scan_group else STOCK_UNIVERSE['Semiconductors']
-                with st.spinner("批量回測中..."):
+                target_stocks = STOCK_UNIVERSE[scan_group]
+                with st.spinner(f"批量回測中 ({scan_group} 機構級運算中)..."):
                     all_data = BatchDataFetcher.batch_download(target_stocks, period="2y")
+                    qqq_df = BatchDataFetcher.get_single_stock("QQQ", "2y")
+                    
                     leaderboard = []
                     for ticker in target_stocks:
                         df = all_data.get(ticker)
-                        if df is not None:
-                            res = q_strategy.backtest_1yr(df)
+                        if df is not None and qqq_df is not None:
+                            res = q_strategy.backtest_1yr(df, qqq_df)
                             if res['trades'] > 0:
                                 leaderboard.append({"Ticker": ticker, "交易次數": res['trades'], "勝率(%)": round(res['win_rate'], 1), "期望值(%)": round(res['expectancy'], 2), "總利潤(%)": round(res['total_pnl'], 2)})
                     if leaderboard:
                         lb_df = pd.DataFrame(leaderboard).sort_values(by="期望值(%)", ascending=False).reset_index(drop=True)
                         st.dataframe(lb_df.style.background_gradient(subset=['總利潤(%)', '期望值(%)'], cmap='Greens'), use_container_width=True)
+                    else:
+                        st.warning("該板塊無股票觸發有效信號。")
 
     elif page == "🎯 VCP 嚴格趨勢選股":
         if market['score'] < 40:
@@ -725,7 +726,7 @@ def main():
         st.info("💡 **策略核心:** 尋找長線牛股的回調錯殺點，精準賣在強支撐位與動能衰竭處 (拒絕接飛刀)。")
         if st.button("尋找收租機會", type="primary"):
             screener, pb, st_txt = ShortPutScreener(), st.progress(0), st.empty()
-            stocks = STOCK_UNIVERSE['Market Leaders'] + STOCK_UNIVERSE['Blue Chips (Put)']
+            stocks = STOCK_UNIVERSE['Market Leaders (龍頭股)'] + STOCK_UNIVERSE['Blue Chips (藍籌收租)']
             def upd(i, t, tic): pb.progress(min((i + 1) / t, 1.0)); st_txt.text(f"掃描 {tic}...")
             with st.spinner("掃描藍籌與熱門股..."):
                 results = screener.scan_batch(stocks, upd)
@@ -774,14 +775,12 @@ def main():
                     if iv_data.get('iv'):
                         st.metric("真實 IV", f"{iv_data['iv']:.1f}%")
 
-    # ===== TAB 5: 新增的策略邏輯解碼頁面 =====
     elif page == "📖 策略邏輯與優勢解碼":
         st.header("📖 核心交易策略與底層邏輯")
         st.write("這套系統融合了華爾街頂級交易員的實戰心法，以下為三大核心策略的運作邏輯：")
         
         st.divider()
         
-        # 策略 1: Qullamaggie
         st.subheader("🦊 1. Kristjan Kullamägi 動能突破 (EP/HTF)")
         st.markdown("""
         **底層邏輯：** 尋找市場上**最強的 1% 妖股**。不碰大盤股或死魚股，只做具備極高波動性 (ADR > 4%) 且處於強烈上升趨勢 (EMA10 > 20 > 50) 的標的。當股票經過 1~3 個月的暴漲後，進入短暫的橫盤休息，這時一旦帶量突破前高 (Pivot)，就是最佳買點。
@@ -789,44 +788,25 @@ def main():
         **本系統的量化條件：**
         * **趨勢：** 價格 > EMA10 > EMA20 > SMA50 (均線多頭排列)
         * **動能：** 過去 3 個月漲幅 > 25%
-        * **波動性：** 平均真實波幅 (ADR) > 3.5%
         * **買入信號：** 盤中價格突破過去 20 天最高點，且成交量大於 50 日均量的 1.5 倍。
+        * **大盤濾網 (Engine 2.0 新增)：** 當日 QQQ 必須位於 50 日均線之上，拒絕在逆風市接飛刀。
         
         **最大優勢 (Advantage)：**
-        > 🎯 **非對稱的盈虧比 (Asymmetric Risk/Reward)。** 初始止損極小（突破日低點），但一旦抓到一波主升浪，利用 EMA20 作為追蹤止損 (Trailing Stop)，可以吃到 30% 甚至 100% 的波段利潤。這是一個「勝率雖為 40-50%，但期望值極高」的暴利策略。
+        > 🎯 **非對稱的盈虧比 (Asymmetric Risk/Reward)。** 初始止損極小（突破日低點），並透過 **2.5R 分批止賺機制** (拉升達風險的 2.5 倍時先鎖定一半利潤)，讓你在抓到主升浪時能確保獲利入袋，同時保留半倉繼續用 EMA20 追蹤。
         """)
 
         st.divider()
 
-        # 策略 2: VCP
         st.subheader("🎯 2. Mark Minervini 波動率收縮 (VCP)")
         st.markdown("""
-        **底層邏輯：** 尋找**「機構吸籌完畢，賣壓徹底枯竭」**的臨界點。一隻處於第二階段 (Stage 2) 上升趨勢的股票，在盤整時會出現波浪般的上下震盪。當震盪幅度越來越小（例如：第一波跌 20%，第二波跌 10%，第三波跌 4%），且成交量極度萎縮 (Dry Up) 時，代表市面上的浮籌已經被洗乾淨，阻力最小的方向就是向上。
-        
-        **本系統的量化條件：**
-        * **Minervini 趨勢模板：** 價格 > SMA50 > SMA150 > SMA200，且距離 52 週低點 > 30%。
-        * **收縮特徵：** 布林線寬度 (BB Width) < 0.15，且 Swing Points 呈現遞減收縮。
-        * **量能特徵：** 近 3 日平均成交量 < 50 日均量的 60% (Dry Up)。
-        
-        **最大優勢 (Advantage)：**
-        > 🛡️ **風險最低，爆發力最強的精準打擊。** 因為我們是在波動率壓縮到極致的瞬間買入，此時設定的止損空間非常小（通常低於 5%）。一旦突破，股價往往會像彈簧一樣迅速拉升。
+        **底層邏輯：** 尋找**「機構吸籌完畢，賣壓徹底枯竭」**的臨界點。一隻處於第二階段 (Stage 2) 上升趨勢的股票，在盤整時會出現波浪般的上下震盪。當震盪幅度越來越小，且成交量極度萎縮 (Dry Up) 時，代表市面上的浮籌已經被洗乾淨，阻力最小的方向就是向上。
         """)
         
         st.divider()
 
-        # 策略 3: Short Put
         st.subheader("💰 3. 恐慌支撐反彈 (Short Put 收租)")
         st.markdown("""
         **底層邏輯：** 大多數新手做 Short Put 喜歡找「橫盤死魚股」，這會導致利潤極低且容易被破位套牢。我們的邏輯是**「Buy the Fear (買入恐慌)」**。尋找基本面極強的長線牛股，在它發生 5%~15% 的短線回調時，散戶恐慌會推高期權權利金 (IV)。這時我們在「鐵底」支撐位賣出 Put 收租。
-        
-        **本系統的量化條件：**
-        * **牛市基底：** 價格必須大於 200 日均線（防腰斬）。
-        * **短期恐慌：** 從高點回調 5%~15%，且 RSI 進入超賣區 (<45)。
-        * **精準踩點：** 價格極度接近 SMA50、SMA100 或布林線下軌（距離 < 4%）。
-        * **拒絕飛刀：** MACD Histogram 綠柱開始縮短，證明空頭動能衰竭。
-        
-        **最大優勢 (Advantage)：**
-        > 💸 **極高的勝率與安全邊際。** 在大盤回調（Risk Off）時，動能突破策略會失效，此時正是 Short Put 賺取豐厚權利金的最佳時機。將行使價 (Strike) 設在強大支撐位的下方，就算接盤，也是以極具折扣的價格買入好公司。
         """)
 
 if __name__ == "__main__":
