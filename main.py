@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-🎯 Market Structure Radar - v10.2 (Engine 2.0 Upgrade)
+🎯 Market Structure Radar - v10.3 (Engine 2.0 + Confluence Support)
 =============================================================
 
-✅ 保留 v10.1 交易明細與所有功能
-✅ 升級 1: 機構級回測 2.0 引入 QQQ 大盤趨勢過濾 (過濾逆風假突破)
-✅ 升級 2: 回測引擎加入 2.5R 分批止賺邏輯 (Partial Take Profit)
-✅ 升級 3: 批量回測解鎖所有板塊 (Software, Market Leaders 等)
+✅ 保留 v10.2 所有功能與回測引擎
+✅ 升級 1: Short Put 策略引入「共振鐵壁 (Confluence Support)」邏輯
+✅ 升級 2: 計算 Volume Profile POC 與 前期橫行頂底
+✅ 升級 3: 視覺化呈現共振支撐位 (在 Short Put 圖表中顯示)
 
 Author: Pro Trader AI (Powered by Gemini)
 """
@@ -21,6 +21,7 @@ from plotly.subplots import make_subplots
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass
+from scipy.signal import find_peaks
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -29,7 +30,7 @@ warnings.filterwarnings('ignore')
 # ============================================
 @dataclass
 class Config:
-    PAGE_TITLE: str = "Market Radar v10.2"
+    PAGE_TITLE: str = "Market Radar v10.3"
     PAGE_ICON: str = "🎯"
 
 CONFIG = Config()
@@ -143,6 +144,74 @@ class TechnicalAnalysis:
             nearest = max(valid, key=lambda x: x[1])
             return {'nearest_support': nearest[0], 'nearest_support_price': nearest[1], 'distance_pct': round((close - nearest[1]) / close * 100, 2), 'sma200_val': sma200}
         return {'nearest_support': '無 (跌破所有支撐)', 'distance_pct': 99.9, 'sma200_val': sma200}
+
+    # 🔥 新增：計算 Volume Profile POC (籌碼密集區)
+    @staticmethod
+    def calculate_poc(df: pd.DataFrame, lookback_days: int = 120, bins: int = 50) -> float:
+        if len(df) < lookback_days:
+            lookback_days = len(df)
+        recent_df = df.tail(lookback_days)
+        
+        # 使用 Typical Price 代表當日價格
+        typical_price = (recent_df['High'] + recent_df['Low'] + recent_df['Close']) / 3
+        
+        # 劃分價格區間 (Bins)
+        hist, bin_edges = np.histogram(typical_price, bins=bins, weights=recent_df['Volume'])
+        
+        # 找出成交量最大 (Volume 最大) 的區間
+        max_vol_idx = np.argmax(hist)
+        poc_price = (bin_edges[max_vol_idx] + bin_edges[max_vol_idx + 1]) / 2
+        return poc_price
+
+    # 🔥 新增：尋找前期橫行頂部 (過去被突破的阻力)
+    @staticmethod
+    def find_previous_resistance(df: pd.DataFrame, lookback_days: int = 120) -> float:
+        if len(df) < lookback_days:
+            lookback_days = len(df)
+        recent_df = df.tail(lookback_days)
+        prices = recent_df['Close'].values
+        
+        # 尋找顯著的高點 (Peaks)
+        peaks, _ = find_peaks(prices, distance=10, prominence=prices.mean()*0.05)
+        
+        if len(peaks) > 0:
+            # 找出過去 120 天內最大的峰值 (作為強阻力/轉化後的強支撐)
+            highest_peak_price = prices[peaks].max()
+            return highest_peak_price
+        return 0.0
+
+    # 🔥 新增：判斷共振支撐 (Confluence)
+    @staticmethod
+    def check_confluence(df: pd.DataFrame) -> Dict:
+        poc = TechnicalAnalysis.calculate_poc(df)
+        prev_res = TechnicalAnalysis.find_previous_resistance(df)
+        sma100 = float(df['Close'].rolling(100).mean().iloc[-1]) if len(df) >= 100 else 0
+        curr_price = float(df['Close'].iloc[-1])
+        
+        confluence_price = 0
+        is_confluence = False
+        notes = []
+        
+        # 檢查 POC 與 前期阻力 是否接近 (誤差 3% 內)
+        if prev_res > 0 and poc > 0:
+            diff_pct = abs(poc - prev_res) / poc
+            if diff_pct <= 0.03 and curr_price > poc: # 確保現價在支撐之上
+                is_confluence = True
+                confluence_price = (poc + prev_res) / 2 # 取平均值作為共振價位
+                notes.append(f"🔥 **發現神級共振!** 籌碼密集區(POC) ${poc:.2f} 與前期頂部 ${prev_res:.2f} 重疊！")
+                
+                # 檢查是否有均線加持
+                if sma100 > 0 and abs(confluence_price - sma100) / confluence_price <= 0.03:
+                    notes.append(f"⭐ **三重共振!** 100天均線 (${sma100:.2f}) 同時踩中此區域，防禦力極高！")
+        
+        return {
+            'is_confluence': is_confluence,
+            'confluence_price': confluence_price,
+            'poc': poc,
+            'prev_res': prev_res,
+            'notes': notes
+        }
+
     
     @staticmethod
     def find_swing_points(df: pd.DataFrame, lookback: int = 60, window: int = 5) -> Dict:
@@ -264,13 +333,14 @@ class VCPScreener:
         return sorted(results, key=lambda x: x.score, reverse=True)
 
 # ============================================
-# 💰 SHORT PUT SCREENER
+# 💰 SHORT PUT SCREENER (Upgraded with Confluence)
 # ============================================
 @dataclass
 class ShortPutCandidate:
     ticker: str; price: float; above_sma200: bool; pullback_depth: float; rsi: float
     macd_reversal: bool; hv_rank: float; real_iv: Optional[float]
     nearest_support: str; nearest_support_price: float; distance_to_support: float
+    is_confluence: bool; confluence_price: float; poc: float; prev_res: float
     score: float; quality: str; suggested_strike: float; notes: List[str]
 
 class ShortPutScreener:
@@ -300,11 +370,35 @@ class ShortPutScreener:
             support_name = support_data.get('nearest_support', 'N/A')
             support_price = support_data.get('nearest_support_price', 0)
 
+            # 🔥 計算共振 (Confluence)
+            confluence_data = self.ta.check_confluence(df)
+            is_confluence = confluence_data['is_confluence']
+            confluence_price = confluence_data['confluence_price']
+            poc = confluence_data['poc']
+            prev_res = confluence_data['prev_res']
+
             score, notes = 0, []
             
-            if dist_to_support <= 2.0: score += 30; notes.append(f"🎯 完美踩中支撐 ({support_name})，距離僅 {dist_to_support:.1f}%")
-            elif dist_to_support <= 4.0: score += 20; notes.append(f"✅ 接近支撐區 ({support_name})，距離 {dist_to_support:.1f}%")
-            else: score -= 10; notes.append(f"❌ 懸在半空，距離支撐 {dist_to_support:.1f}% (風險高)")
+            # 判斷是否踩中共振支撐
+            if is_confluence:
+                dist_to_confluence = (curr_price - confluence_price) / curr_price * 100
+                if dist_to_confluence <= 4.0:
+                    score += 50 # 極高權重
+                    notes.extend(confluence_data['notes'])
+                    notes.append(f"🎯 價格已接近共振區 (${confluence_price:.2f})，距離 {dist_to_confluence:.1f}%")
+                    # 將建議行使價設在共振位之下
+                    suggested_strike = round(confluence_price * 0.98, 2)
+                else:
+                    # 如果距離太遠，照舊用普通 Support 計算
+                    suggested_strike = round(support_price * 0.98, 2) if support_price > 0 else round(curr_price * 0.9, 2)
+            else:
+                suggested_strike = round(support_price * 0.98, 2) if support_price > 0 else round(curr_price * 0.9, 2)
+
+            # 原有的 Support 評分
+            if not is_confluence:
+                if dist_to_support <= 2.0: score += 30; notes.append(f"🎯 完美踩中支撐 ({support_name})，距離僅 {dist_to_support:.1f}%")
+                elif dist_to_support <= 4.0: score += 20; notes.append(f"✅ 接近支撐區 ({support_name})，距離 {dist_to_support:.1f}%")
+                else: score -= 10; notes.append(f"❌ 懸在半空，距離支撐 {dist_to_support:.1f}% (風險高)")
 
             if -15 <= pullback_depth <= -5: score += 20; notes.append(f"✅ 健康回調 ({pullback_depth:.1f}%)，散戶恐慌")
             elif pullback_depth > -5: score += 5; notes.append(f"⚠️ 離高點太近，期權肉不多")
@@ -318,10 +412,16 @@ class ShortPutScreener:
             else: score -= 10; notes.append("⚠️ 下跌動能仍在釋放")
                 
             quality = 'A+' if score >= 80 else 'A' if score >= 60 else 'B' if score >= 40 else 'C'
-            suggested_strike = round(support_price * 0.98, 2) if support_price > 0 else round(curr_price * 0.9, 2)
             
             if score >= 40: 
-                return ShortPutCandidate(ticker=ticker, price=curr_price, above_sma200=True, pullback_depth=pullback_depth, rsi=rsi, macd_reversal=macd_reversal, hv_rank=hv_rank, real_iv=real_iv, nearest_support=support_name, nearest_support_price=support_price, distance_to_support=dist_to_support, score=score, quality=quality, suggested_strike=suggested_strike, notes=notes)
+                return ShortPutCandidate(
+                    ticker=ticker, price=curr_price, above_sma200=True, pullback_depth=pullback_depth, 
+                    rsi=rsi, macd_reversal=macd_reversal, hv_rank=hv_rank, real_iv=real_iv, 
+                    nearest_support=support_name, nearest_support_price=support_price, 
+                    distance_to_support=dist_to_support, 
+                    is_confluence=is_confluence, confluence_price=confluence_price, poc=poc, prev_res=prev_res,
+                    score=score, quality=quality, suggested_strike=suggested_strike, notes=notes
+                )
             return None
         except: return None
     
@@ -369,7 +469,6 @@ class QullamaggieStrategy:
             return {'ticker': ticker, 'price': curr_price, 'adr': adr, 'ret_3m': ret_3m, 'pivot': pivot_price, 'stop_loss': ema20, 'is_setup': is_setup, 'triggered_today': triggered_today, 'ai_note': ai_note}
         except: return None
 
-    # 🔥 機構級回測引擎 2.0 (加入大盤過濾與分批止賺)
     def backtest_1yr(self, df: pd.DataFrame, qqq_df: pd.DataFrame = None) -> Dict:
         if len(df) < 252 + 50: return {'trades': 0}
         
@@ -381,13 +480,12 @@ class QullamaggieStrategy:
         test_df['High_20'] = test_df['High'].shift(1).rolling(20).max()
         test_df['AvgVol_50'] = test_df['Volume'].shift(1).rolling(50).mean()
         
-        # 🛡️ 注入 QQQ 大盤濾網數據
         if qqq_df is not None:
             test_df['QQQ_Close'] = qqq_df['Close'].reindex(test_df.index).ffill()
             test_df['QQQ_SMA50'] = test_df['QQQ_Close'].rolling(50).mean()
         else:
             test_df['QQQ_Close'] = 1
-            test_df['QQQ_SMA50'] = 0 # 無數據時默認通行
+            test_df['QQQ_SMA50'] = 0 
             
         test_df = test_df.tail(252).copy()
         
@@ -402,7 +500,6 @@ class QullamaggieStrategy:
                 if not pd.isna(row.AvgVol_50) and row.AvgVol_50 > 0:
                     vol_surge = row.Volume > (row.AvgVol_50 * 1.5)
                 
-                # 🛡️ 大盤過濾器：當日 QQQ 必須在 50MA 之上
                 market_ok = row.QQQ_Close > row.QQQ_SMA50 if 'QQQ_Close' in test_df.columns else True
                 
                 if (row.High > row.High_20 and row.EMA10 > row.EMA20 > row.SMA50 and row.ADR > 3.0 and vol_surge and market_ok):
@@ -412,7 +509,6 @@ class QullamaggieStrategy:
                     current_stop = initial_stop
                     entry_date = date
                     
-                    # 💰 計算 2.5R 獲利目標價 (Partial Take Profit)
                     risk = entry_price - initial_stop
                     tp_price = entry_price + (risk * 2.5) 
                     partial_taken = False
@@ -421,21 +517,19 @@ class QullamaggieStrategy:
             else:
                 current_stop = max(current_stop, row.EMA20)
                 
-                # 💰 觸發分批止賺 (拉升達 2.5R)
                 if not partial_taken and row.High >= tp_price:
                     partial_taken = True
-                    exec_tp = max(tp_price, row.Open) # 確保跳空高開能賣在更高價
+                    exec_tp = max(tp_price, row.Open) 
                     partial_pnl = (exec_tp / entry_price - 1) * 100
-                    sell_signals.append((date, exec_tp)) # 在圖表上標記止賺點
+                    sell_signals.append((date, exec_tp)) 
                     
-                # 🛑 觸發追蹤止損 (跌破 EMA20)
                 if row.Low < current_stop:
                     in_position = False
                     exit_price = min(current_stop, row.Open) 
                     final_pnl = (exit_price / entry_price - 1) * 100
                     
                     if partial_taken:
-                        total_trade_pnl = (partial_pnl + final_pnl) / 2 # 綜合半倉止賺與半倉止損的總利潤
+                        total_trade_pnl = (partial_pnl + final_pnl) / 2 
                         status_str = "⚫ 止賺+追蹤止損"
                     else:
                         total_trade_pnl = final_pnl
@@ -496,7 +590,7 @@ class MarketRegime:
 # ============================================
 class ChartBuilder:
     @staticmethod
-    def create_chart_with_annotations(df: pd.DataFrame, ticker: str, pivot: float = None, entry: float = None, stop: float = None, support: float = None) -> go.Figure:
+    def create_chart_with_annotations(df: pd.DataFrame, ticker: str, pivot: float = None, entry: float = None, stop: float = None, support: float = None, confluence: float = None) -> go.Figure:
         df = df.copy()
         df['SMA20'], df['SMA50'] = df['Close'].rolling(20).mean(), df['Close'].rolling(50).mean()
         df['BB_Upper'], df['BB_Lower'] = df['SMA20'] + df['Close'].rolling(20).std() * 2, df['SMA20'] - df['Close'].rolling(20).std() * 2
@@ -511,7 +605,12 @@ class ChartBuilder:
         if pivot: fig.add_hline(y=pivot, line_dash="dash", line_color="cyan", line_width=2, annotation_text=f"📍 Pivot ${pivot:.2f}", annotation_position="right", row=1, col=1)
         if entry: fig.add_hline(y=entry, line_dash="dash", line_color="green", line_width=2, annotation_text=f"🎯 Entry ${entry:.2f}", annotation_position="right", row=1, col=1)
         if stop: fig.add_hline(y=stop, line_dash="dash", line_color="red", line_width=2, annotation_text=f"🛑 Stop ${stop:.2f}", annotation_position="right", row=1, col=1)
-        if support: fig.add_hline(y=support, line_dash="dot", line_color="yellow", line_width=1, annotation_text=f"📊 Support ${support:.2f}", annotation_position="right", row=1, col=1)
+        
+        # 🔥 如果有共振位，畫粗綠線；否則畫普通黃色支撐線
+        if confluence: 
+            fig.add_hline(y=confluence, line_dash="solid", line_color="#00FF00", line_width=3, annotation_text=f"🔥 神級共振區 ${confluence:.2f}", annotation_position="right", row=1, col=1)
+        elif support: 
+            fig.add_hline(y=support, line_dash="dot", line_color="yellow", line_width=1, annotation_text=f"📊 Support ${support:.2f}", annotation_position="right", row=1, col=1)
         
         colors = ['#00CC96' if df['Close'].iloc[i] >= df['Open'].iloc[i] else '#EF553B' for i in range(len(df))]
         fig.add_trace(go.Bar(x=df.index, y=df['Volume'], marker_color=colors, showlegend=False), row=2, col=1)
@@ -567,7 +666,7 @@ def main():
                              "📖 策略邏輯與優勢解碼"]) 
     
     st.sidebar.divider()
-    st.sidebar.markdown("v10.2 | AI 驅動量化系統")
+    st.sidebar.markdown("v10.3 | AI 驅動量化系統 (共振防護)")
 
     # --- Main Content ---
     st.header(page)
@@ -632,7 +731,7 @@ def main():
             if st.button("▶️ 執行單股回測"):
                 with st.spinner(f"正在以機構級精度計算 {bt_ticker}..."):
                     df = BatchDataFetcher.get_single_stock(bt_ticker, "2y")
-                    qqq_df = BatchDataFetcher.get_single_stock("QQQ", "2y") # 引入 QQQ 數據
+                    qqq_df = BatchDataFetcher.get_single_stock("QQQ", "2y") 
                     
                     if df is not None and qqq_df is not None:
                         bt_result = q_strategy.backtest_1yr(df, qqq_df)
@@ -645,7 +744,6 @@ def main():
                             m4.metric("平均虧損", f"{bt_result['avg_loss']:.1f}%")
                             m5.metric("期望值", f"{bt_result['expectancy']:+.2f}%")
                             
-                            # 📝 顯示所有交易明細表格
                             st.markdown("### 📝 過去一年交易明細 (Trade Log)")
                             if bt_result['history']:
                                 hist_df = pd.DataFrame(bt_result['history'])
@@ -675,7 +773,6 @@ def main():
             
             st.divider()
             st.subheader("🏆 歷史妖股批量掃描 (Engine 2.0)")
-            # 📂 升級：開放所有板塊供用戶選擇
             scan_group = st.selectbox("選擇掃描板塊", list(STOCK_UNIVERSE.keys()))
             
             if st.button("🚀 啟動歷史掃描"):
@@ -723,25 +820,50 @@ def main():
         if market['score'] < 40:
             st.success("✅ **市場提示:** 大盤正在回調，這正是 Short Put 賺取高額恐慌權利金 (High IV) 的最佳時機！")
 
-        st.info("💡 **策略核心:** 尋找長線牛股的回調錯殺點，精準賣在強支撐位與動能衰竭處 (拒絕接飛刀)。")
-        if st.button("尋找收租機會", type="primary"):
+        st.info("💡 **v10.3 升級核心:** 尋找神級「共振鐵壁 (Confluence)」。當 Volume Profile 的籌碼密集區 (POC) 與前期突破阻力位重疊，就是大機構必定護盤的防線！")
+        if st.button("尋找最強共振收租機會", type="primary"):
             screener, pb, st_txt = ShortPutScreener(), st.progress(0), st.empty()
-            stocks = STOCK_UNIVERSE['Market Leaders (龍頭股)'] + STOCK_UNIVERSE['Blue Chips (藍籌收租)']
+            stocks = STOCK_UNIVERSE['Market Leaders (龍頭股)'] + STOCK_UNIVERSE['Blue Chips (藍籌收租)'] + STOCK_UNIVERSE['Semiconductors (半導體)']
             def upd(i, t, tic): pb.progress(min((i + 1) / t, 1.0)); st_txt.text(f"掃描 {tic}...")
-            with st.spinner("掃描藍籌與熱門股..."):
+            with st.spinner("掃描藍籌與熱門股，尋找共振位..."):
                 results = screener.scan_batch(stocks, upd)
             pb.empty(); st_txt.empty()
             
             if results:
+                # 把有共振的排到最上面
+                results = sorted(results, key=lambda x: (x.is_confluence, x.score), reverse=True)
+                
                 st.success(f"找到 {len(results)} 個安全收租機會")
-                for res in results[:10]:
+                for res in results[:15]:
                     with st.container(border=True):
-                        st.markdown(f"### 🛡️ {res.ticker} (現價 ${res.price:.2f})")
+                        if res.is_confluence:
+                            st.markdown(f"### 🔥 [神級共振] {res.ticker} (現價 ${res.price:.2f})")
+                        else:
+                            st.markdown(f"### 🛡️ {res.ticker} (現價 ${res.price:.2f})")
+                            
                         col1, col2 = st.columns(2)
-                        col1.write(f"- 回調幅度: {res.pullback_depth:.1f}%\n- 踩中支撐: {res.nearest_support} (距 {res.distance_to_support:.1f}%)")
+                        col1.write(f"- 回調幅度: {res.pullback_depth:.1f}%")
+                        if res.is_confluence:
+                            col1.write(f"- 🏆 共振價位: **${res.confluence_price:.2f}**")
+                            col1.write(f"  *(POC ${res.poc:.2f} 與前高 ${res.prev_res:.2f} 重疊)*")
+                        else:
+                            col1.write(f"- 踩中支撐: {res.nearest_support} (距 {res.distance_to_support:.1f}%)")
+                            
                         col2.success(f"**建議 Sell Put Strike:** ${res.suggested_strike:.2f}")
-                        with st.expander("查看詳細邏輯"):
+                        
+                        with st.expander("查看詳細邏輯與圖表"):
                             for n in res.notes: st.write(n)
+                            # 🔥 新增圖表按鈕
+                            if st.button("查看共振圖表", key=f"sp_chart_{res.ticker}"):
+                                df = BatchDataFetcher.get_single_stock(res.ticker, "1y")
+                                confluence_val = res.confluence_price if res.is_confluence else None
+                                support_val = res.nearest_support_price if not res.is_confluence else None
+                                fig = ChartBuilder.create_chart_with_annotations(
+                                    df, res.ticker, 
+                                    support=support_val, 
+                                    confluence=confluence_val
+                                )
+                                st.plotly_chart(fig, use_container_width=True)
 
     elif page == "📈 個股深度圖表":
         ticker = st.text_input("輸入代碼 (如 NVDA)", value="NVDA").upper()
@@ -784,15 +906,6 @@ def main():
         st.subheader("🦊 1. Kristjan Kullamägi 動能突破 (EP/HTF)")
         st.markdown("""
         **底層邏輯：** 尋找市場上**最強的 1% 妖股**。不碰大盤股或死魚股，只做具備極高波動性 (ADR > 4%) 且處於強烈上升趨勢 (EMA10 > 20 > 50) 的標的。當股票經過 1~3 個月的暴漲後，進入短暫的橫盤休息，這時一旦帶量突破前高 (Pivot)，就是最佳買點。
-        
-        **本系統的量化條件：**
-        * **趨勢：** 價格 > EMA10 > EMA20 > SMA50 (均線多頭排列)
-        * **動能：** 過去 3 個月漲幅 > 25%
-        * **買入信號：** 盤中價格突破過去 20 天最高點，且成交量大於 50 日均量的 1.5 倍。
-        * **大盤濾網 (Engine 2.0 新增)：** 當日 QQQ 必須位於 50 日均線之上，拒絕在逆風市接飛刀。
-        
-        **最大優勢 (Advantage)：**
-        > 🎯 **非對稱的盈虧比 (Asymmetric Risk/Reward)。** 初始止損極小（突破日低點），並透過 **2.5R 分批止賺機制** (拉升達風險的 2.5 倍時先鎖定一半利潤)，讓你在抓到主升浪時能確保獲利入袋，同時保留半倉繼續用 EMA20 追蹤。
         """)
 
         st.divider()
@@ -807,6 +920,9 @@ def main():
         st.subheader("💰 3. 恐慌支撐反彈 (Short Put 收租)")
         st.markdown("""
         **底層邏輯：** 大多數新手做 Short Put 喜歡找「橫盤死魚股」，這會導致利潤極低且容易被破位套牢。我們的邏輯是**「Buy the Fear (買入恐慌)」**。尋找基本面極強的長線牛股，在它發生 5%~15% 的短線回調時，散戶恐慌會推高期權權利金 (IV)。這時我們在「鐵底」支撐位賣出 Put 收租。
+        
+        🔥 **v10.3 共振升級 (Confluence)：**
+        不再單純依賴移動平均線！系統會自動尋找 **「籌碼密集區 (Volume Profile POC)」** 與 **「前期橫盤頂部 (頂底轉換)」**。當這兩個由真金白銀堆砌出來的價位重疊時，就會形成「神級共振防線」。將 Strike Price 設在這個區域下方，機構投資者會在上面幫你死守，勝率極高！
         """)
 
 if __name__ == "__main__":
