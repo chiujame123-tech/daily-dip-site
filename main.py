@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-🎯 Market Structure Radar - v10.3 (Engine 2.0 + Confluence Support)
+🎯 Market Structure Radar - v10.3 (Engine 2.0 + Confluence Support + Bug Fix)
 =============================================================
 
 ✅ 保留 v10.2 所有功能與回測引擎
 ✅ 升級 1: Short Put 策略引入「共振鐵壁 (Confluence Support)」邏輯
-✅ 升級 2: 計算 Volume Profile POC 與 前期橫行頂底
-✅ 升級 3: 視覺化呈現共振支撐位 (在 Short Put 圖表中顯示)
+✅ 升級 2: 視覺化呈現共振支撐位 (在 Short Put 圖表中顯示綠色粗線)
+✅ 修正 3: 解決 StreamlitDuplicateElementKey 按鈕撞名 Bug 與股票名單去重
 
 Author: Pro Trader AI (Powered by Gemini)
 """
@@ -145,42 +145,32 @@ class TechnicalAnalysis:
             return {'nearest_support': nearest[0], 'nearest_support_price': nearest[1], 'distance_pct': round((close - nearest[1]) / close * 100, 2), 'sma200_val': sma200}
         return {'nearest_support': '無 (跌破所有支撐)', 'distance_pct': 99.9, 'sma200_val': sma200}
 
-    # 🔥 新增：計算 Volume Profile POC (籌碼密集區)
+    # 🔥 計算 Volume Profile POC
     @staticmethod
     def calculate_poc(df: pd.DataFrame, lookback_days: int = 120, bins: int = 50) -> float:
         if len(df) < lookback_days:
             lookback_days = len(df)
         recent_df = df.tail(lookback_days)
-        
-        # 使用 Typical Price 代表當日價格
         typical_price = (recent_df['High'] + recent_df['Low'] + recent_df['Close']) / 3
-        
-        # 劃分價格區間 (Bins)
         hist, bin_edges = np.histogram(typical_price, bins=bins, weights=recent_df['Volume'])
-        
-        # 找出成交量最大 (Volume 最大) 的區間
         max_vol_idx = np.argmax(hist)
         poc_price = (bin_edges[max_vol_idx] + bin_edges[max_vol_idx + 1]) / 2
         return poc_price
 
-    # 🔥 新增：尋找前期橫行頂部 (過去被突破的阻力)
+    # 🔥 尋找前期橫行頂部
     @staticmethod
     def find_previous_resistance(df: pd.DataFrame, lookback_days: int = 120) -> float:
         if len(df) < lookback_days:
             lookback_days = len(df)
         recent_df = df.tail(lookback_days)
         prices = recent_df['Close'].values
-        
-        # 尋找顯著的高點 (Peaks)
         peaks, _ = find_peaks(prices, distance=10, prominence=prices.mean()*0.05)
-        
         if len(peaks) > 0:
-            # 找出過去 120 天內最大的峰值 (作為強阻力/轉化後的強支撐)
             highest_peak_price = prices[peaks].max()
             return highest_peak_price
         return 0.0
 
-    # 🔥 新增：判斷共振支撐 (Confluence)
+    # 🔥 判斷共振支撐 (Confluence)
     @staticmethod
     def check_confluence(df: pd.DataFrame) -> Dict:
         poc = TechnicalAnalysis.calculate_poc(df)
@@ -192,15 +182,12 @@ class TechnicalAnalysis:
         is_confluence = False
         notes = []
         
-        # 檢查 POC 與 前期阻力 是否接近 (誤差 3% 內)
         if prev_res > 0 and poc > 0:
             diff_pct = abs(poc - prev_res) / poc
-            if diff_pct <= 0.03 and curr_price > poc: # 確保現價在支撐之上
+            if diff_pct <= 0.03 and curr_price > poc: 
                 is_confluence = True
-                confluence_price = (poc + prev_res) / 2 # 取平均值作為共振價位
+                confluence_price = (poc + prev_res) / 2 
                 notes.append(f"🔥 **發現神級共振!** 籌碼密集區(POC) ${poc:.2f} 與前期頂部 ${prev_res:.2f} 重疊！")
-                
-                # 檢查是否有均線加持
                 if sma100 > 0 and abs(confluence_price - sma100) / confluence_price <= 0.03:
                     notes.append(f"⭐ **三重共振!** 100天均線 (${sma100:.2f}) 同時踩中此區域，防禦力極高！")
         
@@ -212,7 +199,6 @@ class TechnicalAnalysis:
             'notes': notes
         }
 
-    
     @staticmethod
     def find_swing_points(df: pd.DataFrame, lookback: int = 60, window: int = 5) -> Dict:
         if len(df) < lookback: return {'swing_highs': [], 'swing_lows': [], 'contractions': []}
@@ -333,7 +319,7 @@ class VCPScreener:
         return sorted(results, key=lambda x: x.score, reverse=True)
 
 # ============================================
-# 💰 SHORT PUT SCREENER (Upgraded with Confluence)
+# 💰 SHORT PUT SCREENER
 # ============================================
 @dataclass
 class ShortPutCandidate:
@@ -370,7 +356,6 @@ class ShortPutScreener:
             support_name = support_data.get('nearest_support', 'N/A')
             support_price = support_data.get('nearest_support_price', 0)
 
-            # 🔥 計算共振 (Confluence)
             confluence_data = self.ta.check_confluence(df)
             is_confluence = confluence_data['is_confluence']
             confluence_price = confluence_data['confluence_price']
@@ -379,22 +364,18 @@ class ShortPutScreener:
 
             score, notes = 0, []
             
-            # 判斷是否踩中共振支撐
             if is_confluence:
                 dist_to_confluence = (curr_price - confluence_price) / curr_price * 100
                 if dist_to_confluence <= 4.0:
-                    score += 50 # 極高權重
+                    score += 50 
                     notes.extend(confluence_data['notes'])
                     notes.append(f"🎯 價格已接近共振區 (${confluence_price:.2f})，距離 {dist_to_confluence:.1f}%")
-                    # 將建議行使價設在共振位之下
                     suggested_strike = round(confluence_price * 0.98, 2)
                 else:
-                    # 如果距離太遠，照舊用普通 Support 計算
                     suggested_strike = round(support_price * 0.98, 2) if support_price > 0 else round(curr_price * 0.9, 2)
             else:
                 suggested_strike = round(support_price * 0.98, 2) if support_price > 0 else round(curr_price * 0.9, 2)
 
-            # 原有的 Support 評分
             if not is_confluence:
                 if dist_to_support <= 2.0: score += 30; notes.append(f"🎯 完美踩中支撐 ({support_name})，距離僅 {dist_to_support:.1f}%")
                 elif dist_to_support <= 4.0: score += 20; notes.append(f"✅ 接近支撐區 ({support_name})，距離 {dist_to_support:.1f}%")
@@ -438,7 +419,7 @@ class ShortPutScreener:
         return results
 
 # ============================================
-# 🦊 QULLAMAGGIE STRATEGY & BACKTEST ENGINE 2.0
+# 🦊 QULLAMAGGIE STRATEGY & BACKTEST ENGINE
 # ============================================
 class QullamaggieStrategy:
     def __init__(self):
@@ -823,7 +804,12 @@ def main():
         st.info("💡 **v10.3 升級核心:** 尋找神級「共振鐵壁 (Confluence)」。當 Volume Profile 的籌碼密集區 (POC) 與前期突破阻力位重疊，就是大機構必定護盤的防線！")
         if st.button("尋找最強共振收租機會", type="primary"):
             screener, pb, st_txt = ShortPutScreener(), st.progress(0), st.empty()
-            stocks = STOCK_UNIVERSE['Market Leaders (龍頭股)'] + STOCK_UNIVERSE['Blue Chips (藍籌收租)'] + STOCK_UNIVERSE['Semiconductors (半導體)']
+            
+            # 🔥 修正 1：股票清單去重 (Deduplication)
+            raw_stocks = STOCK_UNIVERSE['Market Leaders (龍頭股)'] + STOCK_UNIVERSE['Blue Chips (藍籌收租)'] + STOCK_UNIVERSE['Semiconductors (半導體)']
+            stocks = list(set(raw_stocks))
+            stocks.sort()
+            
             def upd(i, t, tic): pb.progress(min((i + 1) / t, 1.0)); st_txt.text(f"掃描 {tic}...")
             with st.spinner("掃描藍籌與熱門股，尋找共振位..."):
                 results = screener.scan_batch(stocks, upd)
@@ -834,7 +820,9 @@ def main():
                 results = sorted(results, key=lambda x: (x.is_confluence, x.score), reverse=True)
                 
                 st.success(f"找到 {len(results)} 個安全收租機會")
-                for res in results[:15]:
+                
+                # 🔥 修正 2：加入 enumerate 並更新 key
+                for idx, res in enumerate(results[:15]):
                     with st.container(border=True):
                         if res.is_confluence:
                             st.markdown(f"### 🔥 [神級共振] {res.ticker} (現價 ${res.price:.2f})")
@@ -853,8 +841,8 @@ def main():
                         
                         with st.expander("查看詳細邏輯與圖表"):
                             for n in res.notes: st.write(n)
-                            # 🔥 新增圖表按鈕
-                            if st.button("查看共振圖表", key=f"sp_chart_{res.ticker}"):
+                            # 🔥 幫個 key 加上 idx，確保 100% 絕對唔會撞名
+                            if st.button("查看共振圖表", key=f"sp_chart_{res.ticker}_{idx}"):
                                 df = BatchDataFetcher.get_single_stock(res.ticker, "1y")
                                 confluence_val = res.confluence_price if res.is_confluence else None
                                 support_val = res.nearest_support_price if not res.is_confluence else None
