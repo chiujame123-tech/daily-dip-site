@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-🎯 Market Structure Radar - v10.3 (Engine 2.0 + Confluence Support + Bug Fix)
+🎯 Market Structure Radar - v10.3 (Engine 2.0 + Confluence + UI Fixes)
 =============================================================
 
-✅ 保留 v10.2 所有功能與回測引擎
 ✅ 升級 1: Short Put 策略引入「共振鐵壁 (Confluence Support)」邏輯
-✅ 升級 2: 視覺化呈現共振支撐位 (在 Short Put 圖表中顯示綠色粗線)
-✅ 修正 3: 解決 StreamlitDuplicateElementKey 按鈕撞名 Bug 與股票名單去重
+✅ 升級 2: 視覺化呈現共振支撐位 (在圖表中顯示綠色粗線)
+✅ 修正 3: 解決 StreamlitDuplicateElementKey 按鈕撞名 Bug 與股票去重
+✅ 修正 4: 引入 Session State 記憶體，解決撳掣畫圖後列表消失 (彈走) 的問題
 
 Author: Pro Trader AI (Powered by Gemini)
 """
@@ -37,8 +37,13 @@ CONFIG = Config()
 
 st.set_page_config(page_title=CONFIG.PAGE_TITLE, page_icon=CONFIG.PAGE_ICON, layout="wide", initial_sidebar_state="expanded")
 
+# 初始化所有大腦記憶體 (Session State)
 if 'paper_trades' not in st.session_state:
     st.session_state.paper_trades = {}
+if 'sp_results' not in st.session_state:
+    st.session_state.sp_results = None
+if 'vcp_results' not in st.session_state:
+    st.session_state.vcp_results = None
 
 STOCK_UNIVERSE = {
     'Market Leaders (龍頭股)': ['NVDA', 'META', 'AMZN', 'GOOGL', 'MSFT', 'AAPL', 'LLY', 'AVGO', 'TSLA', 'AMD', 'CRM', 'NOW', 'PANW', 'CRWD', 'NFLX', 'COST', 'ISRG', 'LULU', 'CMG', 'FICO'],
@@ -587,7 +592,7 @@ class ChartBuilder:
         if entry: fig.add_hline(y=entry, line_dash="dash", line_color="green", line_width=2, annotation_text=f"🎯 Entry ${entry:.2f}", annotation_position="right", row=1, col=1)
         if stop: fig.add_hline(y=stop, line_dash="dash", line_color="red", line_width=2, annotation_text=f"🛑 Stop ${stop:.2f}", annotation_position="right", row=1, col=1)
         
-        # 🔥 如果有共振位，畫粗綠線；否則畫普通黃色支撐線
+        # 🔥 共振位，畫粗綠線；否則畫普通黃色支撐線
         if confluence: 
             fig.add_hline(y=confluence, line_dash="solid", line_color="#00FF00", line_width=3, annotation_text=f"🔥 神級共振區 ${confluence:.2f}", annotation_position="right", row=1, col=1)
         elif support: 
@@ -647,7 +652,7 @@ def main():
                              "📖 策略邏輯與優勢解碼"]) 
     
     st.sidebar.divider()
-    st.sidebar.markdown("v10.3 | AI 驅動量化系統 (共振防護)")
+    st.sidebar.markdown("v10.3 | AI 驅動量化系統 (完美版)")
 
     # --- Main Content ---
     st.header(page)
@@ -784,28 +789,33 @@ def main():
             screener = VCPScreener()
             with st.spinner("掃描全市場 VCP 形態..."):
                 results = screener.scan_batch(ALL_STOCKS)
-                if results:
-                    st.success(f"找到 {len(results)} 隻純正 VCP 股票")
-                    for r in results[:10]:
-                        with st.expander(f"🎯 **{r.ticker}** | 評分: {r.score} | 現價: ${r.price:.2f}"):
-                            st.write(f"**Pivot 突破位:** ${r.pivot_price:.2f} | **安全止損:** ${r.stop_loss:.2f}")
-                            st.write(f"收縮波段: {[f'{c:.1f}%' for c in r.contractions]}")
-                            for note in r.notes: st.write(note)
-                            if st.button("查看圖表", key=f"vcp_{r.ticker}"):
-                                df = BatchDataFetcher.get_single_stock(r.ticker, "6mo")
-                                fig = ChartBuilder.create_chart_with_annotations(df, r.ticker, pivot=r.pivot_price, stop=r.stop_loss)
-                                st.plotly_chart(fig, use_container_width=True)
-                else: st.warning("目前市場沒有符合嚴格 VCP 模板的股票。")
+                st.session_state.vcp_results = results # 加入保險箱防彈走
+                
+        # 從保險箱讀取 VCP 結果
+        if st.session_state.vcp_results:
+            results = st.session_state.vcp_results
+            st.success(f"找到 {len(results)} 隻純正 VCP 股票")
+            for idx, r in enumerate(results[:10]):
+                with st.expander(f"🎯 **{r.ticker}** | 評分: {r.score} | 現價: ${r.price:.2f}"):
+                    st.write(f"**Pivot 突破位:** ${r.pivot_price:.2f} | **安全止損:** ${r.stop_loss:.2f}")
+                    st.write(f"收縮波段: {[f'{c:.1f}%' for c in r.contractions]}")
+                    for note in r.notes: st.write(note)
+                    # 加入 idx 防撞 key
+                    if st.button("查看圖表", key=f"vcp_{r.ticker}_{idx}"):
+                        df = BatchDataFetcher.get_single_stock(r.ticker, "6mo")
+                        fig = ChartBuilder.create_chart_with_annotations(df, r.ticker, pivot=r.pivot_price, stop=r.stop_loss)
+                        st.plotly_chart(fig, use_container_width=True)
 
     elif page == "💰 Short Put 恐慌收租":
         if market['score'] < 40:
             st.success("✅ **市場提示:** 大盤正在回調，這正是 Short Put 賺取高額恐慌權利金 (High IV) 的最佳時機！")
 
         st.info("💡 **v10.3 升級核心:** 尋找神級「共振鐵壁 (Confluence)」。當 Volume Profile 的籌碼密集區 (POC) 與前期突破阻力位重疊，就是大機構必定護盤的防線！")
+        
         if st.button("尋找最強共振收租機會", type="primary"):
             screener, pb, st_txt = ShortPutScreener(), st.progress(0), st.empty()
             
-            # 🔥 修正 1：股票清單去重 (Deduplication)
+            # 去重
             raw_stocks = STOCK_UNIVERSE['Market Leaders (龍頭股)'] + STOCK_UNIVERSE['Blue Chips (藍籌收租)'] + STOCK_UNIVERSE['Semiconductors (半導體)']
             stocks = list(set(raw_stocks))
             stocks.sort()
@@ -815,43 +825,46 @@ def main():
                 results = screener.scan_batch(stocks, upd)
             pb.empty(); st_txt.empty()
             
-            if results:
-                # 把有共振的排到最上面
-                results = sorted(results, key=lambda x: (x.is_confluence, x.score), reverse=True)
-                
-                st.success(f"找到 {len(results)} 個安全收租機會")
-                
-                # 🔥 修正 2：加入 enumerate 並更新 key
-                for idx, res in enumerate(results[:15]):
-                    with st.container(border=True):
-                        if res.is_confluence:
-                            st.markdown(f"### 🔥 [神級共振] {res.ticker} (現價 ${res.price:.2f})")
-                        else:
-                            st.markdown(f"### 🛡️ {res.ticker} (現價 ${res.price:.2f})")
-                            
-                        col1, col2 = st.columns(2)
-                        col1.write(f"- 回調幅度: {res.pullback_depth:.1f}%")
-                        if res.is_confluence:
-                            col1.write(f"- 🏆 共振價位: **${res.confluence_price:.2f}**")
-                            col1.write(f"  *(POC ${res.poc:.2f} 與前高 ${res.prev_res:.2f} 重疊)*")
-                        else:
-                            col1.write(f"- 踩中支撐: {res.nearest_support} (距 {res.distance_to_support:.1f}%)")
-                            
-                        col2.success(f"**建議 Sell Put Strike:** ${res.suggested_strike:.2f}")
+            # 加入保險箱防彈走
+            st.session_state.sp_results = results
+
+        # 從保險箱讀取 Short Put 結果
+        if st.session_state.sp_results:
+            results = st.session_state.sp_results
+            results = sorted(results, key=lambda x: (x.is_confluence, x.score), reverse=True)
+            
+            st.success(f"找到 {len(results)} 個安全收租機會")
+            
+            for idx, res in enumerate(results[:15]):
+                with st.container(border=True):
+                    if res.is_confluence:
+                        st.markdown(f"### 🔥 [神級共振] {res.ticker} (現價 ${res.price:.2f})")
+                    else:
+                        st.markdown(f"### 🛡️ {res.ticker} (現價 ${res.price:.2f})")
                         
-                        with st.expander("查看詳細邏輯與圖表"):
-                            for n in res.notes: st.write(n)
-                            # 🔥 幫個 key 加上 idx，確保 100% 絕對唔會撞名
-                            if st.button("查看共振圖表", key=f"sp_chart_{res.ticker}_{idx}"):
-                                df = BatchDataFetcher.get_single_stock(res.ticker, "1y")
-                                confluence_val = res.confluence_price if res.is_confluence else None
-                                support_val = res.nearest_support_price if not res.is_confluence else None
-                                fig = ChartBuilder.create_chart_with_annotations(
-                                    df, res.ticker, 
-                                    support=support_val, 
-                                    confluence=confluence_val
-                                )
-                                st.plotly_chart(fig, use_container_width=True)
+                    col1, col2 = st.columns(2)
+                    col1.write(f"- 回調幅度: {res.pullback_depth:.1f}%")
+                    if res.is_confluence:
+                        col1.write(f"- 🏆 共振價位: **${res.confluence_price:.2f}**")
+                        col1.write(f"  *(POC ${res.poc:.2f} 與前高 ${res.prev_res:.2f} 重疊)*")
+                    else:
+                        col1.write(f"- 踩中支撐: {res.nearest_support} (距 {res.distance_to_support:.1f}%)")
+                        
+                    col2.success(f"**建議 Sell Put Strike:** ${res.suggested_strike:.2f}")
+                    
+                    with st.expander("查看詳細邏輯與圖表"):
+                        for n in res.notes: st.write(n)
+                        # 加入 idx 防撞 key
+                        if st.button("查看共振圖表", key=f"sp_chart_{res.ticker}_{idx}"):
+                            df = BatchDataFetcher.get_single_stock(res.ticker, "1y")
+                            confluence_val = res.confluence_price if res.is_confluence else None
+                            support_val = res.nearest_support_price if not res.is_confluence else None
+                            fig = ChartBuilder.create_chart_with_annotations(
+                                df, res.ticker, 
+                                support=support_val, 
+                                confluence=confluence_val
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
 
     elif page == "📈 個股深度圖表":
         ticker = st.text_input("輸入代碼 (如 NVDA)", value="NVDA").upper()
